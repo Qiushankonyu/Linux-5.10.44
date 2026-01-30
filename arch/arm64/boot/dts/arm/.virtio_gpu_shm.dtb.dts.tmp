@@ -1,0 +1,79 @@
+# 0 "arch/arm64/boot/dts/arm/virtio_gpu_shm.dts"
+# 0 "<built-in>"
+# 0 "<command-line>"
+# 1 "arch/arm64/boot/dts/arm/virtio_gpu_shm.dts"
+/dts-v1/;
+
+
+
+/ {
+    model = "Virtio-GPU Static SHM Board";
+    compatible = "linux,dummy-virt";
+
+    #address-cells = <2>;
+    #size-cells = <2>;
+
+    cpus {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        cpu@0 {
+            device_type = "cpu";
+            compatible = "arm,cortex-a53";
+            reg = <0>;
+            enable-method = "psci";
+        };
+
+        cpu@1 {
+            device_type = "cpu";
+            compatible = "arm,cortex-a53";
+            reg = <1>;
+            enable-method = "psci";
+        };
+    };
+
+    memory@40000000 {
+        device_type = "memory";
+        reg = <0x0 0x40000000 0x0 0x20000000>;
+    };
+
+    reserved-memory {
+        #address-cells = <2>;
+        #size-cells = <2>;
+        ranges;
+
+        vpu_shm_mem: region@F0000000 {
+            reg = <0x0 0xF0000000 0x0 0x02000000>;
+            no-map;
+            linux,phandle = <&vpu_shm_mem>;
+        };
+    };
+
+    soc {
+        #address-cells = <2>;
+        #size-cells = <2>;
+        compatible = "simple-bus";
+        ranges;
+
+        gic: interrupt-controller@8000000 {
+            compatible = "arm,gic-v3";
+            #interrupt-cells = <3>;
+            interrupt-controller;
+            reg = <0x0 0x08000000 0x0 0x10000>;
+        };
+
+        virtio_gpu@3eff0000 {
+            compatible = "virtio,mmio";
+            reg = <0x0 0x3eff0000 0x0 0x200>;
+
+
+
+
+
+            interrupts = <0 100 4>;
+
+            interrupt-parent = <&gic>;
+            memory-region = <&vpu_shm_mem>;
+        };
+    };
+};

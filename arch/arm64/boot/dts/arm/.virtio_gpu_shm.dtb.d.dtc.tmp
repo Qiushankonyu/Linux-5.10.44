@@ -1,0 +1,1 @@
+arch/arm64/boot/dts/arm/virtio_gpu_shm.dtb: arch/arm64/boot/dts/arm/.virtio_gpu_shm.dtb.dts.tmp
