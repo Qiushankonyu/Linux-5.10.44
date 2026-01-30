@@ -1,1 +1,1 @@
-#define UTS_RELEASE "5.10.44+"
+#define UTS_RELEASE "5.10.44-vpu+"
