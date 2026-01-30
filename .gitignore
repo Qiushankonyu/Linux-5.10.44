@@ -1,0 +1,52 @@
+# Linux kernel build artifacts
+*.o
+*.a
+*.ko
+*.mod
+*.mod.c
+.*.cmd
+Module.symvers
+modules.order
+modules.builtin
+modules.builtin.modinfo
+.tmp_versions/
+.vmlinux*
+System.map
+vmlinux
+*.bin
+*.elf
+
+# Build directories
+debian/
+tmp/
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Compiled Object files
+*.slo
+*.lo
+*.obj
+*.pyc
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+
+# Backup files
+*.bak
+*.backup
