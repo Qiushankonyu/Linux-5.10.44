@@ -1,1 +1,0 @@
-virtio_gpu_shm.o: arch/arm64/boot/dts/arm/virtio_gpu_shm.dts
