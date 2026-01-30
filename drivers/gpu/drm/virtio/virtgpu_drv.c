@@ -149,7 +149,7 @@ static int virtio_gpu_probe(struct virtio_device *vdev)
         printk(KERN_ERR "[VPU] Gen Pool Create Failed\n");
     }
     /* === 插入结束 === */
-	
+
 	ret = drm_dev_register(dev, 0);
 	if (ret)
 		goto err_free;

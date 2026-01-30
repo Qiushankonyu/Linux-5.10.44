@@ -262,3 +262,122 @@ err_free_gem:
 	drm_gem_shmem_free_object(&shmem_obj->base);
 	return ret;
 }
+
+// int virtio_gpu_object_create(struct virtio_gpu_device *vgdev,
+//                              struct virtio_gpu_object_params *params,
+//                              struct virtio_gpu_object **bo_ptr,
+//                              struct virtio_gpu_fence *fence)
+// {
+//     struct virtio_gpu_object_array *objs = NULL;
+//     struct drm_gem_shmem_object *shmem_obj;
+//     struct virtio_gpu_object *bo;
+//     struct virtio_gpu_mem_entry *ents;
+//     unsigned int nents;
+//     int ret;
+
+//     /* === 新增变量：用于暂存申请到的 VPU 地址 === */
+//     unsigned long vpu_vaddr = 0; 
+
+//     *bo_ptr = NULL;
+
+//     params->size = roundup(params->size, PAGE_SIZE);
+
+//     /* === 修改 1: 尝试从 VPU 池申请内存 === */
+//     if (vgdev->vpu_pool) {
+//         vpu_vaddr = gen_pool_alloc(vgdev->vpu_pool, params->size);
+//         if (vpu_vaddr) {
+//             printk(KERN_INFO "[VPU] Alloc success from pool. Size: %lu\n", params->size);
+// 			/* === 新增实验代码 Start === */
+//             /* 0xFF 代表全 1，在像素里通常是白色或亮色 */
+//             /* 既然 cat 写不进去，我们就在这里强行把显存涂白！ */
+//             memset((void *)vpu_vaddr, 0xFF, params->size);
+//             printk(KERN_INFO "[VPU] Debug: Filled memory with 0xFF (White)\n");
+//             /* === 新增实验代码 End === */
+//         }
+//     }
+//     /* === 结束修改 1 === */
+
+//     /* 这里的 shmem_create 依然要调用，我们需要利用它创建基本的 GEM 对象结构体 */
+//     shmem_obj = drm_gem_shmem_create(vgdev->ddev, params->size);
+//     if (IS_ERR(shmem_obj)) {
+//         /* 如果对象创建失败，别忘了把刚才申请到的 VPU 内存还回去 */
+//         if (vpu_vaddr)
+//             gen_pool_free(vgdev->vpu_pool, vpu_vaddr, params->size);
+//         return PTR_ERR(shmem_obj);
+//     }
+//     bo = gem_to_virtio_gpu_obj(&shmem_obj->base);
+
+// 	bo->params = *params;
+
+//     /* === 修改 2: 如果是从 VPU 申请的，填入地址信息 === */
+//     if (vpu_vaddr) {
+//         bo->vpu_vaddr = vpu_vaddr;
+//         /* 计算物理地址：基地址 0xF0000000 + 偏移量 */
+//         /* 偏移量 = (当前虚拟地址 - 映射区的起始虚拟地址) */
+//         bo->vpu_paddr = 0xF0000000 + (vpu_vaddr - (unsigned long)vgdev->vpu_shm_virt);
+        
+//         /* 强制标记为 dumb，因为这是物理连续显存 */
+//         bo->dumb = true; 
+//     } else {
+//         /* 如果没申请到，就维持原样 */
+//         bo->dumb = params->dumb;
+//     }
+//     /* === 结束修改 2 === */
+
+//     ret = virtio_gpu_resource_id_get(vgdev, &bo->hw_res_handle);
+//     if (ret < 0)
+//         goto err_free_gem;
+
+//     /* bo->dumb = params->dumb;  <-- 这行被移到上面处理了 */
+
+//     if (fence) {
+//         ret = -ENOMEM;
+//         objs = virtio_gpu_array_alloc(1);
+//         if (!objs)
+//             goto err_put_id;
+//         virtio_gpu_array_add_obj(objs, &bo->base.base);
+
+//         ret = virtio_gpu_array_lock_resv(objs);
+//         if (ret != 0)
+//             goto err_put_objs;
+//     }
+
+//     if (params->virgl) {
+//         virtio_gpu_cmd_resource_create_3d(vgdev, bo, params,
+//                           objs, fence);
+//     } else {
+//         virtio_gpu_cmd_create_resource(vgdev, bo, params,
+//                            objs, fence);
+//     }
+
+//     /* === 修改 3: 这里的初始化逻辑分叉 === */
+//     if (bo->vpu_vaddr) {
+//         /* 如果是 VPU 内存，不需要初始化 shmem sg table (因为我们有物理地址了) */
+//         ents = NULL;
+//         nents = 0;
+//     } else {
+//         /* 原有的标准流程：申请系统 RAM 并建立 scatterlist */
+//         ret = virtio_gpu_object_shmem_init(vgdev, bo, &ents, &nents);
+//         if (ret != 0) {
+//             virtio_gpu_free_object(&shmem_obj->base);
+//             return ret;
+//         }
+//     }
+//     /* === 结束修改 3 === */
+
+//     /* 注意：virtio_gpu_object_attach 函数我们也需要修改，让它能处理 ents 为 NULL 的情况 */
+//     virtio_gpu_object_attach(vgdev, bo, ents, nents);
+
+//     *bo_ptr = bo;
+//     return 0;
+
+// err_put_objs:
+//     virtio_gpu_array_put_free(objs);
+// err_put_id:
+//     virtio_gpu_resource_id_put(vgdev, bo->hw_res_handle);
+// err_free_gem:
+//     if (vpu_vaddr) /* 如果出错，别忘了释放 VPU 内存 */
+//         gen_pool_free(vgdev->vpu_pool, vpu_vaddr, params->size);
+//     drm_gem_shmem_free_object(&shmem_obj->base);
+//     return ret;
+// }

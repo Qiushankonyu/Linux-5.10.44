@@ -1094,13 +1094,64 @@ void virtio_gpu_cmd_submit(struct virtio_gpu_device *vgdev,
 	virtio_gpu_queue_fenced_ctrl_buffer(vgdev, vbuf, fence);
 }
 
+// void virtio_gpu_object_attach(struct virtio_gpu_device *vgdev,
+// 			      struct virtio_gpu_object *obj,
+// 			      struct virtio_gpu_mem_entry *ents,
+// 			      unsigned int nents)
+// {
+// 	virtio_gpu_cmd_resource_attach_backing(vgdev, obj->hw_res_handle,
+// 					       ents, nents, NULL);
+// }
 void virtio_gpu_object_attach(struct virtio_gpu_device *vgdev,
-			      struct virtio_gpu_object *obj,
-			      struct virtio_gpu_mem_entry *ents,
-			      unsigned int nents)
+                              struct virtio_gpu_object *obj,
+                              struct virtio_gpu_mem_entry *ents,
+                              unsigned int nents)
 {
-	virtio_gpu_cmd_resource_attach_backing(vgdev, obj->hw_res_handle,
-					       ents, nents, NULL);
+    /* === 修改开始：检查是否为 VPU 专用内存 === */
+    if (obj->vpu_vaddr) {
+        struct virtio_gpu_mem_entry *vpu_ents;
+        unsigned int n_pages;
+        int i;
+
+        /* 1. 计算页数 (32MB 大概是 8192 页) */
+        n_pages = obj->params.size / PAGE_SIZE;
+
+        /* 2. 分配一个临时数组来存放页信息 */
+        /* 我们需要告诉 QEMU 每一页的物理地址在哪里 */
+        vpu_ents = kmalloc_array(n_pages, sizeof(struct virtio_gpu_mem_entry), GFP_KERNEL);
+        if (!vpu_ents) {
+            printk(KERN_ERR "[VPU] Failed to allocate ents for attach\n");
+            return;
+        }
+
+        /* 3. 填充数组：因为物理内存是连续的，所以可以用循环简单计算 */
+        for (i = 0; i < n_pages; i++) {
+            /* 第 i 页的物理地址 = 基地址 + i * 4KB */
+            uint64_t addr = obj->vpu_paddr + i * PAGE_SIZE;
+            
+            vpu_ents[i].addr = cpu_to_le64(addr);
+            vpu_ents[i].length = cpu_to_le32(PAGE_SIZE);
+            vpu_ents[i].padding = 0;
+        }
+
+        printk(KERN_INFO "[VPU] Attaching ResID %d: %d pages at Phys 0x%lx\n", 
+               obj->hw_res_handle, n_pages, obj->vpu_paddr);
+
+        /* 4. 发送命令给 QEMU */
+        virtio_gpu_cmd_resource_attach_backing(vgdev, obj->hw_res_handle,
+                                               vpu_ents, n_pages, NULL);
+
+        /* 5. 临时数组用完即弃 */
+        kfree(vpu_ents);
+        
+        /* 任务完成，直接返回，跳过后面的原有逻辑 */
+        return;
+    }
+    /* === 修改结束 === */
+
+    /* 原有逻辑 (普通内存走这里) */
+    virtio_gpu_cmd_resource_attach_backing(vgdev, obj->hw_res_handle,
+                           ents, nents, NULL);
 }
 
 void virtio_gpu_cursor_ping(struct virtio_gpu_device *vgdev,

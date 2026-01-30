@@ -80,6 +80,13 @@ struct virtio_gpu_object {
 
 	int uuid_state;
 	uuid_t uuid;
+
+	/* === 新增代码 Start === */
+    unsigned long vpu_vaddr; /* 记录从池子里申请到的虚拟地址 */
+    unsigned long vpu_paddr; /* 记录对应的物理地址 */
+	struct virtio_gpu_object_params params;
+    /* === 新增代码 End === */
+
 };
 #define gem_to_virtio_gpu_obj(gobj) \
 	container_of((gobj), struct virtio_gpu_object, base.base)
