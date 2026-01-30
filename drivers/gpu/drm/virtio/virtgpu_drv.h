@@ -41,6 +41,9 @@
 #include <drm/drm_probe_helper.h>
 #include <drm/virtgpu_drm.h>
 
+// 使用 genalloc 标准内存管理
+#include <linux/genalloc.h>
+
 #define DRIVER_NAME "virtio_gpu"
 #define DRIVER_DESC "virtio GPU"
 #define DRIVER_DATE "0"
@@ -221,6 +224,11 @@ struct virtio_gpu_device {
 
 	/* protects resource state when exporting */
 	spinlock_t resource_export_lock;
+
+
+	/* 在结构体里添加这个成员变量 (建议加在 ddev 下面) */
+    struct gen_pool *vpu_pool;     // <--- 新增：这就是我们的内存池管家
+    void __iomem *vpu_shm_virt;    // <--- 新增：保存映射后的内核虚拟地址
 };
 
 struct virtio_gpu_fpriv {

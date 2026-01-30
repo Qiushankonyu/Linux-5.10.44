@@ -26,6 +26,10 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
+ /* 1. 在文件最开头定义地址宏 */
+#define VPU_SHM_BASE 0xF0000000
+#define VPU_SHM_SIZE 0x02000000  /* 32MB */
+
 #include <linux/module.h>
 #include <linux/console.h>
 #include <linux/pci.h>
@@ -119,6 +123,45 @@ static int virtio_gpu_probe(struct virtio_device *vdev)
 	ret = virtio_gpu_init(dev);
 	if (ret)
 		goto err_free;
+
+	// === 开始插入代码 ===
+    /* 获取 vgdev 指针 (如果上下文中没有 vgdev，则从 dev 中获取) */
+    struct virtio_gpu_device *vgdev = dev->dev_private;
+
+    /* === 修正后的插入代码 === */
+    printk(KERN_INFO "[VPU] Starting Generic Allocator Init...\n");
+
+    /* 1. 创建内存池 */
+    vgdev->vpu_pool = gen_pool_create(12, -1);
+    if (!vgdev->vpu_pool) {
+        printk(KERN_ERR "[VPU] Failed to create gen_pool\n");
+        /* 注意：这里可能需要做一些清理工作，但为了演示先直接返回错误 */
+        return -ENOMEM;
+    }
+
+    /* 2. 映射内存 (注意参数修正：传入 vdev->dev) */
+    /* 我们使用 &vdev->dev 作为设备指针，它是 struct device * 类型 */
+    vgdev->vpu_shm_virt = devm_ioremap_wc(&vdev->dev, VPU_SHM_BASE, VPU_SHM_SIZE);
+    if (!vgdev->vpu_shm_virt) {
+        printk(KERN_ERR "[VPU] Failed to ioremap 0x%x\n", VPU_SHM_BASE);
+        return -ENOMEM;
+    }
+
+    /* 3. 加入内存池 */
+    ret = gen_pool_add_virt(vgdev->vpu_pool, 
+                            (unsigned long)vgdev->vpu_shm_virt, 
+                            VPU_SHM_BASE, 
+                            VPU_SHM_SIZE, 
+                            -1);
+    if (ret) {
+        printk(KERN_ERR "[VPU] Failed to add memory to pool\n");
+        return ret;
+    }
+
+    printk(KERN_INFO "[VPU] Success! SHM mapped at Virt: %p, Phys: 0x%x\n", 
+           vgdev->vpu_shm_virt, VPU_SHM_BASE);
+    // === 插入结束 ===
+
 
 	ret = drm_dev_register(dev, 0);
 	if (ret)
