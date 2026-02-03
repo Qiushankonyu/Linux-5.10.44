@@ -58,10 +58,6 @@ if [ $? -ne 0 ]; then
 fi
 
 echo "✅ 设备树编译成功"
-# 验证设备树内容
-echo "📋 验证设备树内容:"
-dtc -I dtb -O dts "$KDIR/qemu_final.dtb" | grep -A 5 "virtio_gpu_binding"
-
 
 echo "⚙️  正在清理 virtio_ring 以确保重编..."
 # 强制删除目标文件，保证 make 一定会重新编译它
@@ -113,15 +109,3 @@ qemu-system-aarch64 \
     -device virtio-gpu-pci,iommu_platform=on,disable-legacy=on,addr=02.0 \
     -serial stdio \
     -dtb "$KDIR/qemu_final.dtb"
-
-# qemu-system-aarch64 \
-#     -M virt \
-#     -cpu cortex-a57 \
-#     -m 4G \
-#     -kernel "$KERNEL_IMAGE" \
-#     -drive file="$ROOTFS_PATH",format=raw,id=hd0,if=none \
-#     -device virtio-blk-device,drive=hd0 \
-#     -append "root=/dev/vda rw console=ttyAMA0 earlycon ignore_loglevel" \
-#     -device virtio-gpu-pci,addr=02.0 \
-#     -serial stdio \
-#     -dtb "$KDIR/qemu_final.dtb"

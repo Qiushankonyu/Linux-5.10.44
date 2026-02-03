@@ -23,24 +23,26 @@
 	};
 
 	reserved-memory {
-        #address-cells = <0x02>;
-        #size-cells = <0x02>;
+        #address-cells = <2>;
+        #size-cells = <2>;
         ranges;
 
-        gpu_reserved: gpu_mem@f0000000 {
+        /* 定义 VPU 共享内存区域，对应 config.yml 中的 shm0 */
+        vpu_shm_region: vpu_shm@f0000000 {
             compatible = "shared-dma-pool";
-            reg = <0x00 0xf0000000 0x00 0x02000000>;
-            no-map;
-            linux,cma-default;
-            phandle = <0x100>; /* 必须有 phandle 给下面引用 */
+            reg = <0x0 0xf0000000 0x0 0x02000000>; /* 32MB at 0xF0000000 */
+            no-map; /* 不要创建通用的 CPU 映射，驱动会自己处理 */
+            linux,cma-default; /* 可选：标记为 CMA 区域 */
         };
     };
-	/* 2. === 新增：专门用于绑定的辅助节点 === */
-    /* 这个节点不对应任何物理硬件，也不会影响 PCIe 总线 */
-    virtio_gpu_binding {
-        compatible = "virtio,binding-helper";
-        /* 这里的引用指向上面的内存池 */
-        memory-region = <&gpu_reserved>; 
+
+    /* * 在 /chosen 或者一个自定义节点中引用它，
+     * 这样 virtio-gpu 驱动可以通过名字找到它，
+     * 而不需要依赖 PCI 总线的复杂绑定。
+     */
+    virtio_gpu_config {
+        compatible = "virtio,gpu-config";
+        memory-region = <&vpu_shm_region>;
     };
 
 	platform-bus@c000000 {

@@ -28,8 +28,8 @@
 
 #include <linux/of.h>
 #include <linux/of_address.h>
-#include <linux/dma-mapping.h>
 #include <linux/of_reserved_mem.h>
+#include <linux/dma-mapping.h>
 
 #include <linux/module.h>
 #include <linux/console.h>
@@ -99,58 +99,129 @@ static int virtio_gpu_pci_quirk(struct drm_device *dev,
 	return drm_dev_set_unique(dev, unique);
 }
 
+// static int virtio_gpu_probe(struct virtio_device *vdev)
+// {
+// 	struct drm_device *dev;
+// 	int ret;
+// 	dev = drm_dev_alloc(&driver, &vdev->dev);
+// 	if (IS_ERR(dev))
+// 		return PTR_ERR(dev);
+
+// 	vdev->priv = dev;
+
+// 	ret = virtio_gpu_pci_quirk(dev, vdev);
+// 	if (ret)
+// 		goto err_free;
+
+// 	ret = virtio_gpu_init(dev);
+// 	if (ret)
+// 		goto err_free;
+
+// 	ret = drm_dev_register(dev, 0);
+// 	if (ret)
+// 		goto err_deinit;
+
+// 	drm_fbdev_generic_setup(dev, 32);
+// 	return 0;
+
+// err_deinit:
+// 	virtio_gpu_deinit(dev);
+// err_free:
+// 	drm_dev_put(dev);
+// 	return ret;
+// }
+
 static int virtio_gpu_probe(struct virtio_device *vdev)
 {
 	struct drm_device *dev;
-	struct device *pci_dev = vdev->dev.parent;
 	int ret;
+	struct device_node *np;
 
-	// === 新增:在任何 virtio 操作前绑定 DMA 内存池 ===
-	if (pci_dev) {
-		struct device_node *helper_node;
-
-		helper_node = of_find_compatible_node(NULL, NULL,
-						      "virtio,binding-helper");
-
-		if (helper_node) {
-			struct device_node *old_node = pci_dev->of_node;
-
-			pci_dev->of_node = helper_node;
-			ret = of_reserved_mem_device_init(pci_dev);
-			pci_dev->of_node = old_node;
-
-			of_node_put(helper_node);
-
-			if (ret == 0) {
-				dev_info(
-					&vdev->dev,
-					"✅ DMA pool attached BEFORE virtio init\n");
-			} else {
-				dev_err(&vdev->dev,
-					"❌ Failed to attach DMA pool: %d\n",
-					ret);
-				return ret; // 直接失败,避免后续问题
-			}
-		} else {
-			dev_err(&vdev->dev, "❌ Helper node not found!\n");
-			return -ENODEV;
-		}
-	}
-
-	/* 原生逻辑保持不变 */
 	dev = drm_dev_alloc(&driver, &vdev->dev);
 	if (IS_ERR(dev))
 		return PTR_ERR(dev);
 
 	vdev->priv = dev;
 
+	/* [修正后的核心逻辑 START] */
+	np = of_find_compatible_node(NULL, NULL, "virtio,gpu-config");
+	if (np) {
+		dev_info(
+			&vdev->dev,
+			"Found virtio,gpu-config node, initializing reserved memory for PARENT device...\n");
+
+		/* * 关键修改：vdev->dev.parent
+         * Virtio Ring 的分配是基于 PCI 设备进行的，所以我们必须
+         * 覆盖 PCI 设备的 DMA 内存池配置。
+         */
+		if (vdev->dev.parent) {
+			ret = of_reserved_mem_device_init_by_idx(
+				vdev->dev.parent, np, 0);
+
+			if (ret) {
+				dev_err(&vdev->dev,
+					"Failed to init reserved memory on parent: %d\n",
+					ret);
+			} else {
+				dev_info(
+					&vdev->dev,
+					"Successfully assigned Reserved Memory to PCI Parent Device!\n");
+			}
+		} else {
+			dev_err(&vdev->dev,
+				"Error: vdev->dev.parent is NULL!\n");
+		}
+
+		of_node_put(np);
+	} else {
+		dev_warn(&vdev->dev,
+			 "virtio,gpu-config node not found in DTB\n");
+	}
+	/* [修正后的核心逻辑 END] */
+
 	ret = virtio_gpu_pci_quirk(dev, vdev);
 	if (ret)
 		goto err_free;
 
+	/* 初始化 GPU (会触发 vring 分配) */
 	ret = virtio_gpu_init(dev);
 	if (ret)
 		goto err_free;
+
+	/* [验证代码保持不变] */
+	{
+		struct virtio_gpu_device *vgdev = dev->dev_private;
+
+		if (vgdev->ctrlq.vq) {
+			u64 addr = virtqueue_get_desc_addr(vgdev->ctrlq.vq);
+			/* 注意：打印时强制转为 u64 避免警告 */
+			dev_info(&vdev->dev,
+				 "VERIFY: Control Queue (vring) PA: 0x%llx\n",
+				 (unsigned long long)addr);
+
+			if (addr >= 0xf0000000 && addr < 0xf2000000)
+				dev_info(
+					&vdev->dev,
+					"PASS: Control Queue is inside Reserved Memory!\n");
+			else
+				dev_err(&vdev->dev,
+					"FAIL: Control Queue is OUTSIDE Reserved Memory!\n");
+		}
+
+		if (vgdev->cursorq.vq) {
+			u64 addr = virtqueue_get_desc_addr(vgdev->cursorq.vq);
+			dev_info(&vdev->dev,
+				 "VERIFY: Cursor Queue (vring) PA: 0x%llx\n",
+				 (unsigned long long)addr);
+			if (addr >= 0xf0000000 && addr < 0xf2000000)
+				dev_info(
+					&vdev->dev,
+					"PASS: Cursor Queue is inside Reserved Memory!\n");
+			else
+				dev_err(&vdev->dev,
+					"FAIL: Cursor Queue is OUTSIDE Reserved Memory!\n");
+		}
+	}
 
 	ret = drm_dev_register(dev, 0);
 	if (ret)

@@ -1,0 +1,202 @@
+apiVersion: v0.0.1
+cfg:
+  hypervisor: {
+    console: {
+      enable: true,
+      input: allowed,
+    }
+  }
+  tool_check: {
+    enable: true,
+  }
+  virtual_machine:
+    - name: Linux
+      autostart: true
+      svm: true
+      smp: 2
+      # hypervisor用于管理该虚拟机所需要的数据存放地址
+      system_memory:
+        start: 0x70000000
+        size: 0x1000000
+      # 物理设备定义
+      physical_device:
+        - name: I/O Space
+          resource:
+            - virt_start: 0x00000000
+              phys_start: 0x00000000
+              length: 0x08000000
+              type: mmio
+            - virt_start: 0x09001000
+              phys_start: 0x09001000
+              length: 0x06FFF000
+              type: mmio
+          # 内存区域定义，目前是恒等映射，这是该虚拟机所使用的内存地址和大小
+        - name: Memory Space
+          resource:
+            - virt_start: 0x40000000
+              phys_start: 0x40000000
+              length: 0x20000000
+              type: ram
+        - name: PCIE Space
+          resource:
+            - virt_start: 0x3eff0000
+              phys_start: 0x3eff0000
+              length: 0x00010000
+              type: mmio
+            - virt_start: 0x10000000
+              phys_start: 0x10000000
+              length: 0x2eff0000
+              type: mmio
+            - virt_start: 0x80_00000000
+              phys_start: 0x80_00000000
+              length: 0x80_00000000
+              type: mmio
+            # PCIE Config Space
+            - virt_start: 0x40_10000000
+              phys_start: 0x40_10000000
+              length: 0x10000000
+              type: mmio
+        - name: Interrupt
+          resource:
+            - virt_start: 34
+              phys_start: 34
+              length: 66
+              type: irq
+            - virt_start: 102
+              phys_start: 102
+              length: 4
+              type: irq
+            - virt_start: 110
+              phys_start: 110
+              length: 914
+              type: irq
+
+        # - name: Uart0
+        #   resource:
+        #     - virt_start: 0x9000000
+        #       phys_start: 0x9000000
+        #       length: 0x1000
+        #       type: mmio
+        #     - virt_start: 33
+        #       phys_start: 33
+        #       length: 1
+        #       type: irq
+      # 物理共享内存地址在该虚拟机中的映射
+      share_memory:
+        - name: shm0
+          mmio:
+            virt_start: 0x78000000
+          memory:
+            virt_start: 0xF0000000
+          vector:
+            virt_start: 100
+      virtual_device:
+        - name: GIC
+      boot:
+        payload:
+          - file: dump1.dtb
+            address: 0x40000000
+          - file: Image
+            address: 0x40200000
+          - file: rootfs.img.gz
+            address: 0x45000000
+        context:
+          - register: pc
+            value: 0x40200000
+          - register: r0
+            value: 0x40000000
+    - name: ReWorks
+      autostart: false
+      svm: false
+      smp: 1
+      system_memory:
+        start: 0x71000000
+        size: 0x1000000
+      physical_device:
+        - name: Memory
+          resource:
+          - virt_start: 0x60000000
+            phys_start: 0x60000000
+            length: 256MiB
+            type: ram
+        # - name: Uart0
+        #   resource:
+        #     - virt_start: 0x9000000
+        #       phys_start: 0x9000000
+        #       length: 0x1000
+        #       type: mmio
+        #     - virt_start: 33
+        #       phys_start: 33
+        #       length: 1
+        #       type: irq
+        # - name: PCIE Space
+        #   resource:
+        #     - virt_start: 0x3eff0000
+        #       phys_start: 0x3eff0000
+        #       length: 0x00010000
+        #       type: mmio
+        #     - virt_start: 0x10000000
+        #       phys_start: 0x10000000
+        #       length: 0x2eff0000
+        #       type: mmio
+        #     - virt_start: 0x80_00000000
+        #       phys_start: 0x80_00000000
+        #       length: 0x80_00000000
+        #       type: mmio
+      # 物理共享内存地址在该虚拟机中的映射
+      share_memory:
+        - name: shm0
+          mmio:
+            virt_start: 0x78000000
+          memory:
+            virt_start: 0xF0000000
+          vector:
+            virt_start: 100
+      boot:
+        payload:
+          - file: dump2.dtb
+            address: 0x60000000
+          - file: Image
+            address: 0x60200000
+          #- file: rootfs.img.gz
+          - file: gvm_rootfs.img.gz
+            address: 0x65000000
+        context:
+          - register: pc
+            value: 0x60200000
+          - register: r0
+            value: 0x60000000
+    # - name: BareMetal
+    #   autostart: false
+    #   smp: 2
+    #   system_memory:
+    #     start: 0x72000000
+    #     size: 0x1000000
+  # 物理共享内存
+  share_memory:
+    - name: shm0
+      memory:
+        phys_start: 0xF0000000
+        length: 32MiB
+      vector:
+        length: 2
+  schedule:
+    method: dedicated
+    strategy:
+      - pcpu: 0
+        vcpu: {vm: Linux, id: 0}
+      - pcpu: 1
+        vcpu: {vm: ReWorks, id: 0}
+      - pcpu: 2
+        vcpu: {vm: Linux, id: 1}
+      # - pcpu: 3
+      #   vcpu: {vm: ReWorks, id: 1}
+    # strategy:
+    #   - pcpu: 2
+    #     vcpu: {vm: Linux, id: 0}
+    #   - pcpu: 3
+    #     vcpu: {vm: Linux, id: 1}
+    #   - pcpu: 0
+    #     vcpu: {vm: ReWorks, id: 0}
+    #   - pcpu: 1
+    #     vcpu: {vm: ReWorks, id: 1}

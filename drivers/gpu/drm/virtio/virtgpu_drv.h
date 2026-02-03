@@ -132,8 +132,6 @@ struct virtio_gpu_vbuffer {
 
 	struct virtio_gpu_object_array *objs;
 	struct list_head list;
-
-	dma_addr_t dma_addr; /* === 新增:DMA 物理地址 === */
 };
 
 struct virtio_gpu_output {

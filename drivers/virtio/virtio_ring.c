@@ -275,47 +275,26 @@ static void *vring_alloc_queue(struct virtio_device *vdev, size_t size,
 			       dma_addr_t *dma_handle, gfp_t flag)
 {
 	if (vring_use_dma_api(vdev)) {
-		/* === 修改开始：验证物理地址 === */
-		void *queue;
-		dma_addr_t check_addr;
-
-		/* 调用 DMA API 分配内存 */
-		queue = dma_alloc_coherent(vdev->dev.parent, size, &check_addr,
-					   flag);
-
-		if (queue) {
-			*dma_handle = check_addr;
-			/* * 关键验证点：
-             * 打印分配到的物理地址 (PhysAddr) 和设备名称
-             * KERN_ERR 确保一定会打印出来
-             */
-			printk(KERN_ERR "=== [VERIFY] Virtio Ring Alloc ===\n");
-			printk(KERN_ERR "Device: %s\n", dev_name(&vdev->dev));
-			printk(KERN_ERR "Phys/DMA Addr: %pad\n", &check_addr);
-
-			/* 简单的判断逻辑 */
-			if (check_addr >= 0xF0000000 &&
-			    check_addr < 0xF2000000) {
-				printk(KERN_ERR
-				       "RESULT: SUCCESS (In 0xF0000000 Pool)\n");
-			} else {
-				printk(KERN_ERR
-				       "RESULT: FAIL (Wrong Address!)\n");
-			}
-			printk(KERN_ERR "==================================\n");
-		}
-
-		return queue;
-		/* === 修改结束 === */
+		return dma_alloc_coherent(vdev->dev.parent, size, dma_handle,
+					  flag);
 	} else {
-		/* else 分支保持原生代码，或者加一句打印证明走错了路 */
-		printk(KERN_ERR
-		       "=== [VERIFY] FAIL: Using NORMAL PATH (No DMA) ===\n");
-
 		void *queue = alloc_pages_exact(PAGE_ALIGN(size), flag);
+
 		if (queue) {
 			phys_addr_t phys_addr = virt_to_phys(queue);
 			*dma_handle = (dma_addr_t)phys_addr;
+
+			/*
+			 * Sanity check: make sure we dind't truncate
+			 * the address.  The only arches I can find that
+			 * have 64-bit phys_addr_t but 32-bit dma_addr_t
+			 * are certain non-highmem MIPS and x86
+			 * configurations, but these configurations
+			 * should never allocate physical pages above 32
+			 * bits, so this is fine.  Just in case, throw a
+			 * warning and abort if we end up with an
+			 * unrepresentable address.
+			 */
 			if (WARN_ON_ONCE(*dma_handle != phys_addr)) {
 				free_pages_exact(queue, PAGE_ALIGN(size));
 				return NULL;
