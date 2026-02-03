@@ -136,28 +136,50 @@ static int virtio_gpu_probe(struct virtio_device *vdev)
 	struct drm_device *dev;
 	int ret;
 	struct device_node *np;
+	struct virtio_gpu_device *vgdev;
 
+	/* [新增] 局部变量，用于临时保存解析结果 */
+	phys_addr_t shm_start = 0;
+	size_t shm_size = 0;
+
+	/* 1. 分配 DRM 设备基础结构 */
 	dev = drm_dev_alloc(&driver, &vdev->dev);
 	if (IS_ERR(dev))
 		return PTR_ERR(dev);
 
 	vdev->priv = dev;
 
-	/* [修正后的核心逻辑 START] */
+	/* 注意：此时不能获取 dev->dev_private，因为它还没分配！ */
+
+	/* 2. 解析设备树 & 设置保留内存 */
 	np = of_find_compatible_node(NULL, NULL, "virtio,gpu-config");
 	if (np) {
-		dev_info(
-			&vdev->dev,
-			"Found virtio,gpu-config node, initializing reserved memory for PARENT device...\n");
+		struct resource res;
+		struct device_node *mem_np;
 
-		/* * 关键修改：vdev->dev.parent
-         * Virtio Ring 的分配是基于 PCI 设备进行的，所以我们必须
-         * 覆盖 PCI 设备的 DMA 内存池配置。
-         */
+		dev_info(&vdev->dev,
+			 "Found virtio,gpu-config node, parsing...\n");
+
+		/* 解析地址范围并暂存到局部变量 */
+		mem_np = of_parse_phandle(np, "memory-region", 0);
+		if (mem_np) {
+			if (of_address_to_resource(mem_np, 0, &res) == 0) {
+				shm_start = res.start;
+				shm_size = resource_size(&res);
+
+				dev_info(
+					&vdev->dev,
+					"VPU Config parsed: Start=0x%llx, Size=0x%llx\n",
+					(unsigned long long)shm_start,
+					(unsigned long long)shm_size);
+			}
+			of_node_put(mem_np);
+		}
+
+		/* 绑定保留内存到 PCI 父设备 */
 		if (vdev->dev.parent) {
 			ret = of_reserved_mem_device_init_by_idx(
 				vdev->dev.parent, np, 0);
-
 			if (ret) {
 				dev_err(&vdev->dev,
 					"Failed to init reserved memory on parent: %d\n",
@@ -171,55 +193,71 @@ static int virtio_gpu_probe(struct virtio_device *vdev)
 			dev_err(&vdev->dev,
 				"Error: vdev->dev.parent is NULL!\n");
 		}
-
 		of_node_put(np);
 	} else {
 		dev_warn(&vdev->dev,
 			 "virtio,gpu-config node not found in DTB\n");
 	}
-	/* [修正后的核心逻辑 END] */
 
 	ret = virtio_gpu_pci_quirk(dev, vdev);
 	if (ret)
 		goto err_free;
 
-	/* 初始化 GPU (会触发 vring 分配) */
+	/* 3. 初始化 GPU
+     * ！！！关键点：virtio_gpu_init 内部会分配 vgdev 并赋值给 dev->dev_private ！！！
+     */
 	ret = virtio_gpu_init(dev);
 	if (ret)
 		goto err_free;
 
-	/* [验证代码保持不变] */
-	{
-		struct virtio_gpu_device *vgdev = dev->dev_private;
+	/* 4. 获取分配好的 vgdev 并保存之前的解析结果 */
+	vgdev = dev->dev_private;
+	vgdev->vpu_shm_start = shm_start;
+	vgdev->vpu_shm_size = shm_size;
 
+	/* 5. 验证 Vring 位置 */
+	{
+		/* 验证 Control Queue */
 		if (vgdev->ctrlq.vq) {
 			u64 addr = virtqueue_get_desc_addr(vgdev->ctrlq.vq);
-			/* 注意：打印时强制转为 u64 避免警告 */
 			dev_info(&vdev->dev,
 				 "VERIFY: Control Queue (vring) PA: 0x%llx\n",
 				 (unsigned long long)addr);
 
-			if (addr >= 0xf0000000 && addr < 0xf2000000)
-				dev_info(
-					&vdev->dev,
-					"PASS: Control Queue is inside Reserved Memory!\n");
-			else
-				dev_err(&vdev->dev,
-					"FAIL: Control Queue is OUTSIDE Reserved Memory!\n");
+			/* 使用结构体中保存的动态范围进行判断 */
+			if (vgdev->vpu_shm_size > 0) {
+				if (addr >= vgdev->vpu_shm_start &&
+				    addr < vgdev->vpu_shm_start +
+						    vgdev->vpu_shm_size) {
+					dev_info(
+						&vdev->dev,
+						"PASS: Control Queue is inside Reserved Memory!\n");
+				} else {
+					dev_err(&vdev->dev,
+						"FAIL: Control Queue is OUTSIDE Reserved Memory!\n");
+				}
+			}
 		}
 
+		/* 验证 Cursor Queue */
 		if (vgdev->cursorq.vq) {
 			u64 addr = virtqueue_get_desc_addr(vgdev->cursorq.vq);
 			dev_info(&vdev->dev,
 				 "VERIFY: Cursor Queue (vring) PA: 0x%llx\n",
 				 (unsigned long long)addr);
-			if (addr >= 0xf0000000 && addr < 0xf2000000)
-				dev_info(
-					&vdev->dev,
-					"PASS: Cursor Queue is inside Reserved Memory!\n");
-			else
-				dev_err(&vdev->dev,
-					"FAIL: Cursor Queue is OUTSIDE Reserved Memory!\n");
+
+			if (vgdev->vpu_shm_size > 0) {
+				if (addr >= vgdev->vpu_shm_start &&
+				    addr < vgdev->vpu_shm_start +
+						    vgdev->vpu_shm_size) {
+					dev_info(
+						&vdev->dev,
+						"PASS: Cursor Queue is inside Reserved Memory!\n");
+				} else {
+					dev_err(&vdev->dev,
+						"FAIL: Cursor Queue is OUTSIDE Reserved Memory!\n");
+				}
+			}
 		}
 	}
 

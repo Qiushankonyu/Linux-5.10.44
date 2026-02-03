@@ -132,6 +132,8 @@ struct virtio_gpu_vbuffer {
 
 	struct virtio_gpu_object_array *objs;
 	struct list_head list;
+
+	dma_addr_t dma_addr;
 };
 
 struct virtio_gpu_output {
@@ -222,8 +224,9 @@ struct virtio_gpu_device {
 	/* protects resource state when exporting */
 	spinlock_t resource_export_lock;
 
-	struct gen_pool *vpu_pool;
-	void __iomem *vpu_shm_virt;
+	/* [新增字段] 用于记录从 DTS 读取到的共享内存信息 */
+	phys_addr_t vpu_shm_start;
+	size_t vpu_shm_size;
 };
 
 struct virtio_gpu_fpriv {
