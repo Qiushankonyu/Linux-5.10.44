@@ -7,6 +7,7 @@
 	#address-cells = <0x02>;
 	compatible = "linux,dummy-virt";
 
+
 	psci {
 		migrate = <0xc4000005>;
 		cpu_on = <0xc4000003>;
@@ -20,6 +21,27 @@
 		reg = <0x00 0x40000000 0x01 0x00>;
 		device_type = "memory";
 	};
+
+	reserved-memory {
+        #address-cells = <0x02>;
+        #size-cells = <0x02>;
+        ranges;
+
+        gpu_reserved: gpu_mem@f0000000 {
+            compatible = "shared-dma-pool";
+            reg = <0x00 0xf0000000 0x00 0x02000000>;
+            no-map;
+            linux,cma-default;
+            phandle = <0x100>; /* 必须有 phandle 给下面引用 */
+        };
+    };
+	/* 2. === 新增：专门用于绑定的辅助节点 === */
+    /* 这个节点不对应任何物理硬件，也不会影响 PCIe 总线 */
+    virtio_gpu_binding {
+        compatible = "virtio,binding-helper";
+        /* 这里的引用指向上面的内存池 */
+        memory-region = <&gpu_reserved>; 
+    };
 
 	platform-bus@c000000 {
 		interrupt-parent = <0x8002>;
@@ -382,20 +404,7 @@
 
 	chosen {
 		stdout-path = "/pl011@9000000";
-		rng-seed = <0x3b7c269f 0x6bb3bde6 0xfbe1d249 0xc605dee0 0x6cacdc10 0xe7e9cae3 0x11dc04f3 0xc6e93e1b>;
-		kaslr-seed = <0x537e526b 0xb35ace13>;
+		rng-seed = <0xdc20a2dd 0xa5f7200a 0x9331d028 0xf988e5a1 0xa5b53b7 0x81d98edb 0xc60fd7da 0x54fb14df>;
+		kaslr-seed = <0x54fac939 0xebfc557>;
 	};
-
-	/* === 在这里插入 (放在最下面最安全) === */
-    reserved-memory {
-        #address-cells = <2>;
-        #size-cells = <2>;
-        ranges;
-
-        vpu_shm_mem: region@F0000000 {
-            reg = <0x0 0xF0000000 0x0 0x02000000>; /* 32MB */
-            no-map;
-        };
-    };
-    /* === 插入结束 === */
 };

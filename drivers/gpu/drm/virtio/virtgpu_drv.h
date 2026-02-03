@@ -41,8 +41,6 @@
 #include <drm/drm_probe_helper.h>
 #include <drm/virtgpu_drm.h>
 
-#include <linux/genalloc.h>
-
 #define DRIVER_NAME "virtio_gpu"
 #define DRIVER_DESC "virtio GPU"
 #define DRIVER_DATE "0"
@@ -80,15 +78,8 @@ struct virtio_gpu_object {
 
 	int uuid_state;
 	uuid_t uuid;
-
-	/* === 新增代码 Start === */
-    unsigned long vpu_vaddr; /* 记录从池子里申请到的虚拟地址 */
-    unsigned long vpu_paddr; /* 记录对应的物理地址 */
-	struct virtio_gpu_object_params params;
-    /* === 新增代码 End === */
-
 };
-#define gem_to_virtio_gpu_obj(gobj) \
+#define gem_to_virtio_gpu_obj(gobj)                                            \
 	container_of((gobj), struct virtio_gpu_object, base.base)
 
 struct virtio_gpu_object_shmem {
@@ -97,7 +88,7 @@ struct virtio_gpu_object_shmem {
 	uint32_t mapped;
 };
 
-#define to_virtio_gpu_shmem(virtio_gpu_object) \
+#define to_virtio_gpu_shmem(virtio_gpu_object)                                 \
 	container_of((virtio_gpu_object), struct virtio_gpu_object_shmem, base)
 
 struct virtio_gpu_object_array {
@@ -114,11 +105,11 @@ typedef void (*virtio_gpu_resp_cb)(struct virtio_gpu_device *vgdev,
 				   struct virtio_gpu_vbuffer *vbuf);
 
 struct virtio_gpu_fence_driver {
-	atomic64_t       last_seq;
-	uint64_t         sync_seq;
-	uint64_t         context;
+	atomic64_t last_seq;
+	uint64_t sync_seq;
+	uint64_t context;
 	struct list_head fences;
-	spinlock_t       lock;
+	spinlock_t lock;
 };
 
 struct virtio_gpu_fence {
@@ -141,6 +132,8 @@ struct virtio_gpu_vbuffer {
 
 	struct virtio_gpu_object_array *objs;
 	struct list_head list;
+
+	dma_addr_t dma_addr; /* === 新增:DMA 物理地址 === */
 };
 
 struct virtio_gpu_output {
@@ -155,14 +148,14 @@ struct virtio_gpu_output {
 	int cur_y;
 	bool needs_modeset;
 };
-#define drm_crtc_to_virtio_gpu_output(x) \
+#define drm_crtc_to_virtio_gpu_output(x)                                       \
 	container_of(x, struct virtio_gpu_output, crtc)
 
 struct virtio_gpu_framebuffer {
 	struct drm_framebuffer base;
 	struct virtio_gpu_fence *fence;
 };
-#define to_virtio_gpu_framebuffer(x) \
+#define to_virtio_gpu_framebuffer(x)                                           \
 	container_of(x, struct virtio_gpu_framebuffer, base)
 
 struct virtio_gpu_queue {
@@ -202,7 +195,7 @@ struct virtio_gpu_device {
 
 	atomic_t pending_commands;
 
-	struct ida	resource_ida;
+	struct ida resource_ida;
 
 	wait_queue_head_t resp_wq;
 	/* current display info */
@@ -211,7 +204,7 @@ struct virtio_gpu_device {
 
 	struct virtio_gpu_fence_driver fence_drv;
 
-	struct ida	ctx_id_ida;
+	struct ida ctx_id_ida;
 
 	bool has_virgl_3d;
 	bool has_edid;
@@ -262,12 +255,13 @@ int virtio_gpu_mode_dumb_create(struct drm_file *file_priv,
 				struct drm_device *dev,
 				struct drm_mode_create_dumb *args);
 int virtio_gpu_mode_dumb_mmap(struct drm_file *file_priv,
-			      struct drm_device *dev,
-			      uint32_t handle, uint64_t *offset_p);
+			      struct drm_device *dev, uint32_t handle,
+			      uint64_t *offset_p);
 
 struct virtio_gpu_object_array *virtio_gpu_array_alloc(u32 nents);
-struct virtio_gpu_object_array*
-virtio_gpu_array_from_handles(struct drm_file *drm_file, u32 *handles, u32 nents);
+struct virtio_gpu_object_array *
+virtio_gpu_array_from_handles(struct drm_file *drm_file, u32 *handles,
+			      u32 nents);
 void virtio_gpu_array_add_obj(struct virtio_gpu_object_array *objs,
 			      struct drm_gem_object *obj);
 int virtio_gpu_array_lock_resv(struct virtio_gpu_object_array *objs);
@@ -290,19 +284,17 @@ void virtio_gpu_cmd_create_resource(struct virtio_gpu_device *vgdev,
 void virtio_gpu_cmd_unref_resource(struct virtio_gpu_device *vgdev,
 				   struct virtio_gpu_object *bo);
 void virtio_gpu_cmd_transfer_to_host_2d(struct virtio_gpu_device *vgdev,
-					uint64_t offset,
-					uint32_t width, uint32_t height,
-					uint32_t x, uint32_t y,
+					uint64_t offset, uint32_t width,
+					uint32_t height, uint32_t x, uint32_t y,
 					struct virtio_gpu_object_array *objs,
 					struct virtio_gpu_fence *fence);
 void virtio_gpu_cmd_resource_flush(struct virtio_gpu_device *vgdev,
-				   uint32_t resource_id,
-				   uint32_t x, uint32_t y,
+				   uint32_t resource_id, uint32_t x, uint32_t y,
 				   uint32_t width, uint32_t height);
 void virtio_gpu_cmd_set_scanout(struct virtio_gpu_device *vgdev,
 				uint32_t scanout_id, uint32_t resource_id,
-				uint32_t width, uint32_t height,
-				uint32_t x, uint32_t y);
+				uint32_t width, uint32_t height, uint32_t x,
+				uint32_t y);
 void virtio_gpu_object_attach(struct virtio_gpu_device *vgdev,
 			      struct virtio_gpu_object *obj,
 			      struct virtio_gpu_mem_entry *ents,
@@ -313,43 +305,41 @@ void virtio_gpu_cursor_ping(struct virtio_gpu_device *vgdev,
 			    struct virtio_gpu_output *output);
 int virtio_gpu_cmd_get_display_info(struct virtio_gpu_device *vgdev);
 int virtio_gpu_cmd_get_capset_info(struct virtio_gpu_device *vgdev, int idx);
-int virtio_gpu_cmd_get_capset(struct virtio_gpu_device *vgdev,
-			      int idx, int version,
+int virtio_gpu_cmd_get_capset(struct virtio_gpu_device *vgdev, int idx,
+			      int version,
 			      struct virtio_gpu_drv_cap_cache **cache_p);
 int virtio_gpu_cmd_get_edids(struct virtio_gpu_device *vgdev);
 void virtio_gpu_cmd_context_create(struct virtio_gpu_device *vgdev, uint32_t id,
 				   uint32_t nlen, const char *name);
 void virtio_gpu_cmd_context_destroy(struct virtio_gpu_device *vgdev,
 				    uint32_t id);
-void virtio_gpu_cmd_context_attach_resource(struct virtio_gpu_device *vgdev,
-					    uint32_t ctx_id,
-					    struct virtio_gpu_object_array *objs);
-void virtio_gpu_cmd_context_detach_resource(struct virtio_gpu_device *vgdev,
-					    uint32_t ctx_id,
-					    struct virtio_gpu_object_array *objs);
-void virtio_gpu_cmd_submit(struct virtio_gpu_device *vgdev,
-			   void *data, uint32_t data_size,
-			   uint32_t ctx_id,
+void virtio_gpu_cmd_context_attach_resource(
+	struct virtio_gpu_device *vgdev, uint32_t ctx_id,
+	struct virtio_gpu_object_array *objs);
+void virtio_gpu_cmd_context_detach_resource(
+	struct virtio_gpu_device *vgdev, uint32_t ctx_id,
+	struct virtio_gpu_object_array *objs);
+void virtio_gpu_cmd_submit(struct virtio_gpu_device *vgdev, void *data,
+			   uint32_t data_size, uint32_t ctx_id,
 			   struct virtio_gpu_object_array *objs,
 			   struct virtio_gpu_fence *fence);
 void virtio_gpu_cmd_transfer_from_host_3d(struct virtio_gpu_device *vgdev,
-					  uint32_t ctx_id,
-					  uint64_t offset, uint32_t level,
+					  uint32_t ctx_id, uint64_t offset,
+					  uint32_t level,
 					  struct drm_virtgpu_3d_box *box,
 					  struct virtio_gpu_object_array *objs,
 					  struct virtio_gpu_fence *fence);
 void virtio_gpu_cmd_transfer_to_host_3d(struct virtio_gpu_device *vgdev,
-					uint32_t ctx_id,
-					uint64_t offset, uint32_t level,
+					uint32_t ctx_id, uint64_t offset,
+					uint32_t level,
 					struct drm_virtgpu_3d_box *box,
 					struct virtio_gpu_object_array *objs,
 					struct virtio_gpu_fence *fence);
-void
-virtio_gpu_cmd_resource_create_3d(struct virtio_gpu_device *vgdev,
-				  struct virtio_gpu_object *bo,
-				  struct virtio_gpu_object_params *params,
-				  struct virtio_gpu_object_array *objs,
-				  struct virtio_gpu_fence *fence);
+void virtio_gpu_cmd_resource_create_3d(struct virtio_gpu_device *vgdev,
+				       struct virtio_gpu_object *bo,
+				       struct virtio_gpu_object_params *params,
+				       struct virtio_gpu_object_array *objs,
+				       struct virtio_gpu_fence *fence);
 void virtio_gpu_ctrl_ack(struct virtqueue *vq);
 void virtio_gpu_cursor_ack(struct virtqueue *vq);
 void virtio_gpu_fence_ack(struct virtqueue *vq);
@@ -359,9 +349,8 @@ void virtio_gpu_dequeue_fence_func(struct work_struct *work);
 
 void virtio_gpu_notify(struct virtio_gpu_device *vgdev);
 
-int
-virtio_gpu_cmd_resource_assign_uuid(struct virtio_gpu_device *vgdev,
-				    struct virtio_gpu_object_array *objs);
+int virtio_gpu_cmd_resource_assign_uuid(struct virtio_gpu_device *vgdev,
+					struct virtio_gpu_object_array *objs);
 
 /* virtgpu_display.c */
 int virtio_gpu_modeset_init(struct virtio_gpu_device *vgdev);
@@ -370,15 +359,14 @@ void virtio_gpu_modeset_fini(struct virtio_gpu_device *vgdev);
 /* virtgpu_plane.c */
 uint32_t virtio_gpu_translate_format(uint32_t drm_fourcc);
 struct drm_plane *virtio_gpu_plane_init(struct virtio_gpu_device *vgdev,
-					enum drm_plane_type type,
-					int index);
+					enum drm_plane_type type, int index);
 
 /* virtgpu_fence.c */
-struct virtio_gpu_fence *virtio_gpu_fence_alloc(
-	struct virtio_gpu_device *vgdev);
+struct virtio_gpu_fence *
+virtio_gpu_fence_alloc(struct virtio_gpu_device *vgdev);
 void virtio_gpu_fence_emit(struct virtio_gpu_device *vgdev,
-			  struct virtio_gpu_ctrl_hdr *cmd_hdr,
-			  struct virtio_gpu_fence *fence);
+			   struct virtio_gpu_ctrl_hdr *cmd_hdr,
+			   struct virtio_gpu_fence *fence);
 void virtio_gpu_fence_event_process(struct virtio_gpu_device *vdev,
 				    u64 last_seq);
 
@@ -394,15 +382,14 @@ int virtio_gpu_object_create(struct virtio_gpu_device *vgdev,
 bool virtio_gpu_is_shmem(struct virtio_gpu_object *bo);
 
 /* virtgpu_prime.c */
-struct dma_buf *virtgpu_gem_prime_export(struct drm_gem_object *obj,
-					 int flags);
+struct dma_buf *virtgpu_gem_prime_export(struct drm_gem_object *obj, int flags);
 struct drm_gem_object *virtgpu_gem_prime_import(struct drm_device *dev,
 						struct dma_buf *buf);
-int virtgpu_gem_prime_get_uuid(struct drm_gem_object *obj,
-			       uuid_t *uuid);
-struct drm_gem_object *virtgpu_gem_prime_import_sg_table(
-	struct drm_device *dev, struct dma_buf_attachment *attach,
-	struct sg_table *sgt);
+int virtgpu_gem_prime_get_uuid(struct drm_gem_object *obj, uuid_t *uuid);
+struct drm_gem_object *
+virtgpu_gem_prime_import_sg_table(struct drm_device *dev,
+				  struct dma_buf_attachment *attach,
+				  struct sg_table *sgt);
 
 /* virtgpu_debugfs.c */
 void virtio_gpu_debugfs_init(struct drm_minor *minor);

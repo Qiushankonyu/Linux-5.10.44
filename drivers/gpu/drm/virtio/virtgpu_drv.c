@@ -26,8 +26,10 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#define VPU_SHM_BASE 0xF0000000
-#define VPU_SHM_SIZE 0x02000000
+#include <linux/of.h>
+#include <linux/of_address.h>
+#include <linux/dma-mapping.h>
+#include <linux/of_reserved_mem.h>
 
 #include <linux/module.h>
 #include <linux/console.h>
@@ -47,7 +49,8 @@ static int virtio_gpu_modeset = -1;
 MODULE_PARM_DESC(modeset, "Disable/Enable modesetting");
 module_param_named(modeset, virtio_gpu_modeset, int, 0400);
 
-static int virtio_gpu_pci_quirk(struct drm_device *dev, struct virtio_device *vdev)
+static int virtio_gpu_pci_quirk(struct drm_device *dev,
+				struct virtio_device *vdev)
 {
 	struct pci_dev *pdev = to_pci_dev(vdev->dev.parent);
 	const char *pname = dev_name(&pdev->dev);
@@ -55,12 +58,11 @@ static int virtio_gpu_pci_quirk(struct drm_device *dev, struct virtio_device *vd
 	char unique[20];
 
 	DRM_INFO("pci: %s detected at %s\n",
-		 vga ? "virtio-vga" : "virtio-gpu-pci",
-		 pname);
+		 vga ? "virtio-vga" : "virtio-gpu-pci", pname);
 	dev->pdev = pdev;
 	if (vga)
-		drm_fb_helper_remove_conflicting_pci_framebuffers(pdev,
-								  "virtiodrmfb");
+		drm_fb_helper_remove_conflicting_pci_framebuffers(
+			pdev, "virtiodrmfb");
 
 	/*
 	 * Normally the drm_dev_set_unique() call is done by core DRM.
@@ -100,63 +102,65 @@ static int virtio_gpu_pci_quirk(struct drm_device *dev, struct virtio_device *vd
 static int virtio_gpu_probe(struct virtio_device *vdev)
 {
 	struct drm_device *dev;
+	struct device *pci_dev = vdev->dev.parent;
 	int ret;
 
-	if (vgacon_text_force() && virtio_gpu_modeset == -1)
-		return -EINVAL;
+	// === 新增:在任何 virtio 操作前绑定 DMA 内存池 ===
+	if (pci_dev) {
+		struct device_node *helper_node;
 
-	if (virtio_gpu_modeset == 0)
-		return -EINVAL;
+		helper_node = of_find_compatible_node(NULL, NULL,
+						      "virtio,binding-helper");
 
+		if (helper_node) {
+			struct device_node *old_node = pci_dev->of_node;
+
+			pci_dev->of_node = helper_node;
+			ret = of_reserved_mem_device_init(pci_dev);
+			pci_dev->of_node = old_node;
+
+			of_node_put(helper_node);
+
+			if (ret == 0) {
+				dev_info(
+					&vdev->dev,
+					"✅ DMA pool attached BEFORE virtio init\n");
+			} else {
+				dev_err(&vdev->dev,
+					"❌ Failed to attach DMA pool: %d\n",
+					ret);
+				return ret; // 直接失败,避免后续问题
+			}
+		} else {
+			dev_err(&vdev->dev, "❌ Helper node not found!\n");
+			return -ENODEV;
+		}
+	}
+
+	/* 原生逻辑保持不变 */
 	dev = drm_dev_alloc(&driver, &vdev->dev);
 	if (IS_ERR(dev))
 		return PTR_ERR(dev);
+
 	vdev->priv = dev;
 
-	if (!strcmp(vdev->dev.parent->bus->name, "pci")) {
-		ret = virtio_gpu_pci_quirk(dev, vdev);
-		if (ret)
-			goto err_free;
-	}
+	ret = virtio_gpu_pci_quirk(dev, vdev);
+	if (ret)
+		goto err_free;
 
 	ret = virtio_gpu_init(dev);
 	if (ret)
 		goto err_free;
 
-		/* === 插入开始 === */
-    /* 获取 vgdev 指针 */
-    struct virtio_gpu_device *vgdev = dev->dev_private; 
-
-    printk(KERN_INFO "[VPU] Starting Generic Allocator Init...\n");
-    /* 创建内存池 */
-    vgdev->vpu_pool = gen_pool_create(12, -1);
-    if (vgdev->vpu_pool) {
-        /* 映射物理内存 (注意这里用 &vdev->dev) */
-        vgdev->vpu_shm_virt = devm_ioremap_wc(&vdev->dev, VPU_SHM_BASE, VPU_SHM_SIZE);
-        if (vgdev->vpu_shm_virt) {
-            /* 加入池子 */
-            int r = gen_pool_add_virt(vgdev->vpu_pool, (unsigned long)vgdev->vpu_shm_virt, 
-                                      VPU_SHM_BASE, VPU_SHM_SIZE, -1);
-            if (r == 0)
-                printk(KERN_INFO "[VPU] Success! SHM mapped at Virt: %p, Phys: 0x%x\n", 
-                       vgdev->vpu_shm_virt, VPU_SHM_BASE);
-            else
-                printk(KERN_ERR "[VPU] Gen Pool Add Failed\n");
-        } else {
-            printk(KERN_ERR "[VPU] ioremap Failed\n");
-        }
-    } else {
-        printk(KERN_ERR "[VPU] Gen Pool Create Failed\n");
-    }
-    /* === 插入结束 === */
-
 	ret = drm_dev_register(dev, 0);
 	if (ret)
-		goto err_free;
+		goto err_deinit;
 
-	drm_fbdev_generic_setup(vdev->priv, 32);
+	drm_fbdev_generic_setup(dev, 32);
 	return 0;
 
+err_deinit:
+	virtio_gpu_deinit(dev);
 err_free:
 	drm_dev_put(dev);
 	return ret;
@@ -220,7 +224,8 @@ MODULE_AUTHOR("Alon Levy");
 DEFINE_DRM_GEM_FOPS(virtio_gpu_driver_fops);
 
 static struct drm_driver driver = {
-	.driver_features = DRIVER_MODESET | DRIVER_GEM | DRIVER_RENDER | DRIVER_ATOMIC,
+	.driver_features =
+		DRIVER_MODESET | DRIVER_GEM | DRIVER_RENDER | DRIVER_ATOMIC,
 	.open = virtio_gpu_driver_open,
 	.postclose = virtio_gpu_driver_postclose,
 
