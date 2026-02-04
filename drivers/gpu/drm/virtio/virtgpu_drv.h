@@ -78,6 +78,8 @@ struct virtio_gpu_object {
 
 	int uuid_state;
 	uuid_t uuid;
+
+	dma_addr_t dma_addr;
 };
 #define gem_to_virtio_gpu_obj(gobj)                                            \
 	container_of((gobj), struct virtio_gpu_object, base.base)

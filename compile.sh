@@ -44,6 +44,9 @@ if [ ! -f "$KDIR/include/generated/autoconf.h" ]; then
     make -C "$KDIR" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare
 fi
 
+echo "🧩 正在更新内核配置 (olddefconfig)..."
+make -C "$KDIR" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+
 # ... (在 "3. 编译模块" 之前插入) ...
 
 echo "🔧 正在重新编译设备树..."
@@ -102,10 +105,15 @@ qemu-system-aarch64 \
     -M virt \
     -cpu cortex-a57 \
     -m 4G \
+    -vga none \
     -kernel "$KERNEL_IMAGE" \
     -drive file="$ROOTFS_PATH",format=raw,id=hd0,if=none \
     -device virtio-blk-device,drive=hd0 \
-    -append "root=/dev/vda rw console=ttyAMA0 earlycon ignore_loglevel" \
-    -device virtio-gpu-pci,iommu_platform=on,disable-legacy=on,addr=02.0 \
+    -append "root=/dev/vda rw console=tty0 earlycon ignore_loglevel" \
+    -device virtio-gpu-pci,iommu_platform=on,disable-legacy=on,addr=02.0,edid=on,xres=1024,yres=768 \
+    -device qemu-xhci \
+    -device usb-kbd \
+    -device usb-mouse \
+    -display gtk,show-cursor=on \
     -serial stdio \
     -dtb "$KDIR/qemu_final.dtb"
