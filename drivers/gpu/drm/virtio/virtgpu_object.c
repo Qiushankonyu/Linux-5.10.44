@@ -24,12 +24,37 @@
  */
 
 #include <linux/dma-mapping.h>
-#include <linux/moduleparam.h>
+#include <linux/pfn.h>
 
 #include "virtgpu_drv.h"
 
 static int virtio_gpu_virglrenderer_workaround = 1;
 module_param_named(virglhack, virtio_gpu_virglrenderer_workaround, int, 0400);
+
+/* [新增] 自定义释放函数 */
+static void virtio_gpu_free_shared_object(struct drm_gem_object *obj)
+{
+	struct virtio_gpu_object *bo = gem_to_virtio_gpu_obj(obj);
+	struct virtio_gpu_device *vgdev = obj->dev->dev_private;
+
+	/* 释放 SG 表 */
+	if (obj->import_attach) {
+		drm_prime_gem_destroy(obj, bo->base.sgt);
+	} else if (bo->base.sgt) {
+		sg_free_table(bo->base.sgt);
+		kfree(bo->base.sgt);
+		bo->base.sgt = NULL;
+	}
+
+	/* [核心] 释放 DMA 共享内存 */
+	if (bo->vaddr && bo->dma_addr) {
+		dma_free_coherent(vgdev->vdev->dev.parent, obj->size, bo->vaddr,
+				  bo->dma_addr);
+	}
+
+	/* 释放 GEM 对象本身 */
+	drm_gem_shmem_free_object(obj);
+}
 
 static int virtio_gpu_resource_id_get(struct virtio_gpu_device *vgdev,
 				      uint32_t *resid)
@@ -103,11 +128,25 @@ static void virtio_gpu_free_object(struct drm_gem_object *obj)
 	virtio_gpu_cleanup_object(bo);
 }
 
-static const struct drm_gem_object_funcs virtio_gpu_shmem_funcs = {
-	.free = virtio_gpu_free_object,
+// static const struct drm_gem_object_funcs virtio_gpu_shmem_funcs = {
+// 	.free = virtio_gpu_free_object,
+// 	.open = virtio_gpu_gem_object_open,
+// 	.close = virtio_gpu_gem_object_close,
+
+// 	.print_info = drm_gem_shmem_print_info,
+// 	.pin = drm_gem_shmem_pin,
+// 	.unpin = drm_gem_shmem_unpin,
+// 	.get_sg_table = drm_gem_shmem_get_sg_table,
+// 	.vmap = drm_gem_shmem_vmap,
+// 	.vunmap = drm_gem_shmem_vunmap,
+// 	.mmap = drm_gem_shmem_mmap,
+// };
+
+/* 定义新的函数操作表，覆盖默认的 free */
+static const struct drm_gem_object_funcs virtio_gpu_gem_funcs = {
+	.free = virtio_gpu_free_shared_object,
 	.open = virtio_gpu_gem_object_open,
 	.close = virtio_gpu_gem_object_close,
-
 	.print_info = drm_gem_shmem_print_info,
 	.pin = drm_gem_shmem_pin,
 	.unpin = drm_gem_shmem_unpin,

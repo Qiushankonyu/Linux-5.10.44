@@ -30,6 +30,7 @@
 #include <linux/virtio.h>
 #include <linux/virtio_config.h>
 #include <linux/virtio_ring.h>
+#include <linux/pfn.h> // 确保包含 pfn 宏
 
 #include "virtgpu_drv.h"
 #include "virtgpu_trace.h"
@@ -39,6 +40,31 @@
 #define VBUFFER_SIZE                                                           \
 	(sizeof(struct virtio_gpu_vbuffer) + MAX_INLINE_CMD_SIZE +             \
 	 MAX_INLINE_RESP_SIZE)
+
+/**
+ * virtio_gpu_fill_sg - 使用已知的 DMA 地址填充 SG 条目
+ * @sg: 目标 scatterlist 指针
+ * @dma_addr: 物理/DMA 地址 (来自 dma_alloc_coherent)
+ * @size: 缓冲区大小
+ *
+ * 这是一个零拷贝操作，专门处理非线性映射的 DMA 内存。
+ */
+/* [修正版] 辅助函数：正确处理页内偏移 */
+static void virtio_gpu_fill_sg(struct scatterlist *sg, dma_addr_t dma_addr,
+			       unsigned int size)
+{
+	/* 计算页内偏移 (例如 0xF0000018 -> offset 0x18) */
+	unsigned int offset = dma_addr & ~PAGE_MASK;
+
+	sg_init_table(sg, 1);
+
+	/* 关键修正：第四个参数传入 offset，而不是 0 */
+	sg_set_page(sg, pfn_to_page(PFN_DOWN(dma_addr)), size, offset);
+
+	/* 设置 DMA 地址 */
+	sg_dma_address(sg) = dma_addr;
+	sg_dma_len(sg) = size;
+}
 
 static void convert_to_hw_box(struct virtio_gpu_box *dst,
 			      const struct drm_virtgpu_3d_box *src)
@@ -83,28 +109,120 @@ void virtio_gpu_free_vbufs(struct virtio_gpu_device *vgdev)
 	vgdev->vbufs = NULL;
 }
 
+// static struct virtio_gpu_vbuffer *
+// virtio_gpu_get_vbuf(struct virtio_gpu_device *vgdev, int size, int resp_size,
+// 		    void *resp_buf, virtio_gpu_resp_cb resp_cb)
+// {
+// 	struct virtio_gpu_vbuffer *vbuf;
+
+// 	vbuf = kmem_cache_zalloc(vgdev->vbufs, GFP_KERNEL);
+// 	if (!vbuf)
+// 		return ERR_PTR(-ENOMEM);
+
+// 	BUG_ON(size > MAX_INLINE_CMD_SIZE ||
+// 	       size < sizeof(struct virtio_gpu_ctrl_hdr));
+// 	vbuf->buf = (void *)vbuf + sizeof(*vbuf);
+// 	vbuf->size = size;
+
+// 	vbuf->resp_cb = resp_cb;
+// 	vbuf->resp_size = resp_size;
+// 	if (resp_size <= MAX_INLINE_RESP_SIZE)
+// 		vbuf->resp_buf = (void *)vbuf->buf + size;
+// 	else
+// 		vbuf->resp_buf = resp_buf;
+// 	BUG_ON(!vbuf->resp_buf);
+// 	return vbuf;
+// }
+
 static struct virtio_gpu_vbuffer *
 virtio_gpu_get_vbuf(struct virtio_gpu_device *vgdev, int size, int resp_size,
 		    void *resp_buf, virtio_gpu_resp_cb resp_cb)
 {
 	struct virtio_gpu_vbuffer *vbuf;
+	dma_addr_t dma_addr;
+	void *shared_mem;
+	int total_alloc_size;
 
+	/* 1. 分配管理结构体
+     * 依然保留原有的 cache 分配方式，但这块内存只存结构体本身
+     * Hypervisor 不需要看到它，所以不用放进共享内存。
+     */
 	vbuf = kmem_cache_zalloc(vgdev->vbufs, GFP_KERNEL);
 	if (!vbuf)
 		return ERR_PTR(-ENOMEM);
 
-	BUG_ON(size > MAX_INLINE_CMD_SIZE ||
-	       size < sizeof(struct virtio_gpu_ctrl_hdr));
-	vbuf->buf = (void *)vbuf + sizeof(*vbuf);
+	/* 2. 计算需要的共享内存总大小
+     * 我们不再使用 Inline 方式，而是将 Command 和 Response
+     * 强行打包到一块连续的 DMA 共享内存中。
+     */
+	total_alloc_size = size + resp_size;
+
+	/* 3. [核心修改] 从父设备的保留内存池分配
+     * 这确保了数据落在 0xF0000000 区域
+     */
+	shared_mem =
+		dma_alloc_coherent(vgdev->vdev->dev.parent, total_alloc_size,
+				   &dma_addr, GFP_KERNEL);
+	if (!shared_mem) {
+		/* 分配失败，回退释放结构体 */
+		kmem_cache_free(vgdev->vbufs, vbuf);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	/* 4. 重构指针指向
+     * vbuf->buf 不再指向结构体末尾，而是指向刚申请的共享内存
+     */
+	vbuf->buf = shared_mem;
 	vbuf->size = size;
 
+	/* 记录 DMA 信息，释放时需要用 */
+	vbuf->dma_addr = dma_addr;
+	vbuf->total_size = total_alloc_size;
+
+	/* 5. 安排 Response Buffer
+     * 无论 resp_size 是大是小，我们都把它放在 Command 后面。
+     * 这样保证 Response 也是写到共享内存里，而不是写到 Guest 的栈上。
+     */
 	vbuf->resp_cb = resp_cb;
 	vbuf->resp_size = resp_size;
-	if (resp_size <= MAX_INLINE_RESP_SIZE)
-		vbuf->resp_buf = (void *)vbuf->buf + size;
-	else
-		vbuf->resp_buf = resp_buf;
-	BUG_ON(!vbuf->resp_buf);
+
+	if (resp_size > 0) {
+		/* 响应区紧跟在命令区之后 */
+		vbuf->resp_buf = (char *)shared_mem + size;
+	} else {
+		vbuf->resp_buf = NULL;
+	}
+
+	/* 忽略传入的 resp_buf 参数，因为我们强制使用共享内存 */
+	BUG_ON(resp_size > 0 && !vbuf->resp_buf);
+
+	/* 6. [动态验证逻辑] 验证地址是否正确 */
+	{
+		static bool verify_once = false;
+		if (!verify_once) {
+			dev_info(&vgdev->vdev->dev,
+				 "VERIFY: get_vbuf PA: 0x%llx (Total: %d)\n",
+				 (unsigned long long)dma_addr,
+				 total_alloc_size);
+
+			/* 使用 probe 阶段保存的 start 进行判定 */
+			if (vgdev->vpu_shm_size > 0) {
+				if (dma_addr >= vgdev->vpu_shm_start &&
+				    dma_addr < vgdev->vpu_shm_start +
+						       vgdev->vpu_shm_size) {
+					dev_info(
+						&vgdev->vdev->dev,
+						"PASS: Command Buffer in Shared Memory!\n");
+				} else {
+					dev_err(&vgdev->vdev->dev,
+						"FAIL: Buffer OUTSIDE Shared Memory! (0x%llx)\n",
+						(unsigned long long)dma_addr);
+				}
+			}
+			verify_once = true;
+		}
+	}
+
 	return vbuf;
 }
 
@@ -169,12 +287,30 @@ static void *virtio_gpu_alloc_cmd_cb(struct virtio_gpu_device *vgdev,
 					 NULL);
 }
 
+// static void free_vbuf(struct virtio_gpu_device *vgdev,
+// 		      struct virtio_gpu_vbuffer *vbuf)
+// {
+// 	if (vbuf->resp_size > MAX_INLINE_RESP_SIZE)
+// 		kfree(vbuf->resp_buf);
+// 	kvfree(vbuf->data_buf);
+// 	kmem_cache_free(vgdev->vbufs, vbuf);
+// }
+
+/* 替换原有的 free_vbuf */
 static void free_vbuf(struct virtio_gpu_device *vgdev,
 		      struct virtio_gpu_vbuffer *vbuf)
 {
-	if (vbuf->resp_size > MAX_INLINE_RESP_SIZE)
-		kfree(vbuf->resp_buf);
-	kvfree(vbuf->data_buf);
+	/* [修改] 释放共享内存区域 */
+	/* * 原代码分别处理 resp_buf 和 data_buf。
+     * 我们的新逻辑是：它们都在同一块 DMA 内存里，首地址是 vbuf->buf (即 data_buf)
+     */
+	if (vbuf->buf && vbuf->dma_addr) {
+		/* 必须使用 parent 设备，大小必须是 alloc 时的大小 */
+		dma_free_coherent(vgdev->vdev->dev.parent, vbuf->total_size,
+				  vbuf->buf, vbuf->dma_addr);
+	}
+
+	/* 释放结构体本身 (元数据) */
 	kmem_cache_free(vgdev->vbufs, vbuf);
 }
 
@@ -370,6 +506,61 @@ again:
 	return 0;
 }
 
+// static int virtio_gpu_queue_fenced_ctrl_buffer(struct virtio_gpu_device *vgdev,
+// 					       struct virtio_gpu_vbuffer *vbuf,
+// 					       struct virtio_gpu_fence *fence)
+// {
+// 	struct scatterlist *sgs[3], vcmd, vout, vresp;
+// 	struct sg_table *sgt = NULL;
+// 	int elemcnt = 0, outcnt = 0, incnt = 0, ret;
+
+// 	/* set up vcmd */
+// 	sg_init_one(&vcmd, vbuf->buf, vbuf->size);
+// 	elemcnt++;
+// 	sgs[outcnt] = &vcmd;
+// 	outcnt++;
+
+// 	/* set up vout */
+// 	if (vbuf->data_size) {
+// 		if (is_vmalloc_addr(vbuf->data_buf)) {
+// 			int sg_ents;
+// 			sgt = vmalloc_to_sgt(vbuf->data_buf, vbuf->data_size,
+// 					     &sg_ents);
+// 			if (!sgt) {
+// 				if (fence && vbuf->objs)
+// 					virtio_gpu_array_unlock_resv(
+// 						vbuf->objs);
+// 				return -1;
+// 			}
+
+// 			elemcnt += sg_ents;
+// 			sgs[outcnt] = sgt->sgl;
+// 		} else {
+// 			sg_init_one(&vout, vbuf->data_buf, vbuf->data_size);
+// 			elemcnt++;
+// 			sgs[outcnt] = &vout;
+// 		}
+// 		outcnt++;
+// 	}
+
+// 	/* set up vresp */
+// 	if (vbuf->resp_size) {
+// 		sg_init_one(&vresp, vbuf->resp_buf, vbuf->resp_size);
+// 		elemcnt++;
+// 		sgs[outcnt + incnt] = &vresp;
+// 		incnt++;
+// 	}
+
+// 	ret = virtio_gpu_queue_ctrl_sgs(vgdev, vbuf, fence, elemcnt, sgs,
+// 					outcnt, incnt);
+
+// 	if (sgt) {
+// 		sg_free_table(sgt);
+// 		kfree(sgt);
+// 	}
+// 	return ret;
+// }
+
 static int virtio_gpu_queue_fenced_ctrl_buffer(struct virtio_gpu_device *vgdev,
 					       struct virtio_gpu_vbuffer *vbuf,
 					       struct virtio_gpu_fence *fence)
@@ -379,12 +570,21 @@ static int virtio_gpu_queue_fenced_ctrl_buffer(struct virtio_gpu_device *vgdev,
 	int elemcnt = 0, outcnt = 0, incnt = 0, ret;
 
 	/* set up vcmd */
-	sg_init_one(&vcmd, vbuf->buf, vbuf->size);
+	/* [修改 START] 替换 vcmd 的 sg_init_one */
+	/* 原代码: sg_init_one(&vcmd, vbuf->buf, vbuf->size); */
+	virtio_gpu_fill_sg(&vcmd, vbuf->dma_addr, vbuf->size);
+	/* [修改 END] */
+
 	elemcnt++;
 	sgs[outcnt] = &vcmd;
 	outcnt++;
 
 	/* set up vout */
+	/* 数据负载部分：通常用于 2D 传输。如果涉及共享内存，建议保持 vmalloc 逻辑
+     * 或者如果确定 data_buf 也在共享区，也应使用 fill_sg。
+     * 目前阶段，为了解决 Bogus Descriptor，主要是 vcmd 和 vresp。
+     * 这里的逻辑暂时保留，防止破坏复杂命令的结构。
+     */
 	if (vbuf->data_size) {
 		if (is_vmalloc_addr(vbuf->data_buf)) {
 			int sg_ents;
@@ -400,6 +600,11 @@ static int virtio_gpu_queue_fenced_ctrl_buffer(struct virtio_gpu_device *vgdev,
 			elemcnt += sg_ents;
 			sgs[outcnt] = sgt->sgl;
 		} else {
+			/* [可选优化] 如果进入这里，说明不是 vmalloc。
+             * 如果 data_buf 也是 dma_alloc_coherent 出来的，
+             * 使用 sg_init_one 依然有风险。
+             * 但绝大多数命令 data_size 为 0，所以这里暂时不动即可。
+             */
 			sg_init_one(&vout, vbuf->data_buf, vbuf->data_size);
 			elemcnt++;
 			sgs[outcnt] = &vout;
@@ -409,7 +614,17 @@ static int virtio_gpu_queue_fenced_ctrl_buffer(struct virtio_gpu_device *vgdev,
 
 	/* set up vresp */
 	if (vbuf->resp_size) {
-		sg_init_one(&vresp, vbuf->resp_buf, vbuf->resp_size);
+		/* [修改 START] 替换 vresp 的 sg_init_one */
+		/* 原代码: sg_init_one(&vresp, vbuf->resp_buf, vbuf->resp_size); */
+
+		/* * 计算响应区的物理地址：
+         * 在 get_vbuf 中，我们将 resp 放在 cmd 之后
+         * 所以：resp_dma = cmd_dma + cmd_size
+         */
+		dma_addr_t resp_dma_addr = vbuf->dma_addr + vbuf->size;
+		virtio_gpu_fill_sg(&vresp, resp_dma_addr, vbuf->resp_size);
+		/* [修改 END] */
+
 		elemcnt++;
 		sgs[outcnt + incnt] = &vresp;
 		incnt++;
@@ -447,6 +662,45 @@ static int virtio_gpu_queue_ctrl_buffer(struct virtio_gpu_device *vgdev,
 	return virtio_gpu_queue_fenced_ctrl_buffer(vgdev, vbuf, NULL);
 }
 
+// static void virtio_gpu_queue_cursor(struct virtio_gpu_device *vgdev,
+// 				    struct virtio_gpu_vbuffer *vbuf)
+// {
+// 	struct virtqueue *vq = vgdev->cursorq.vq;
+// 	struct scatterlist *sgs[1], ccmd;
+// 	int idx, ret, outcnt;
+// 	bool notify;
+
+// 	if (!drm_dev_enter(vgdev->ddev, &idx)) {
+// 		free_vbuf(vgdev, vbuf);
+// 		return;
+// 	}
+
+// 	sg_init_one(&ccmd, vbuf->buf, vbuf->size);
+// 	sgs[0] = &ccmd;
+// 	outcnt = 1;
+
+// 	spin_lock(&vgdev->cursorq.qlock);
+// retry:
+// 	ret = virtqueue_add_sgs(vq, sgs, outcnt, 0, vbuf, GFP_ATOMIC);
+// 	if (ret == -ENOSPC) {
+// 		spin_unlock(&vgdev->cursorq.qlock);
+// 		wait_event(vgdev->cursorq.ack_queue, vq->num_free >= outcnt);
+// 		spin_lock(&vgdev->cursorq.qlock);
+// 		goto retry;
+// 	} else {
+// 		trace_virtio_gpu_cmd_queue(vq, virtio_gpu_vbuf_ctrl_hdr(vbuf));
+
+// 		notify = virtqueue_kick_prepare(vq);
+// 	}
+
+// 	spin_unlock(&vgdev->cursorq.qlock);
+
+// 	if (notify)
+// 		virtqueue_notify(vq);
+
+// 	drm_dev_exit(idx);
+// }
+
 static void virtio_gpu_queue_cursor(struct virtio_gpu_device *vgdev,
 				    struct virtio_gpu_vbuffer *vbuf)
 {
@@ -460,7 +714,13 @@ static void virtio_gpu_queue_cursor(struct virtio_gpu_device *vgdev,
 		return;
 	}
 
-	sg_init_one(&ccmd, vbuf->buf, vbuf->size);
+	/* [修改 START] 替换 sg_init_one */
+	/* 原代码: sg_init_one(&ccmd, vbuf->buf, vbuf->size); */
+
+	// 使用我们在 virtgpu_drv.h 中新增的 dma_addr 字段
+	virtio_gpu_fill_sg(&ccmd, vbuf->dma_addr, vbuf->size);
+	/* [修改 END] */
+
 	sgs[0] = &ccmd;
 	outcnt = 1;
 

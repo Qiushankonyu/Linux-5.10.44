@@ -133,7 +133,8 @@ struct virtio_gpu_vbuffer {
 	struct virtio_gpu_object_array *objs;
 	struct list_head list;
 
-	dma_addr_t dma_addr;
+	dma_addr_t dma_addr; //记录分配时的地址
+	int total_size; //记录分配时的大小
 };
 
 struct virtio_gpu_output {
