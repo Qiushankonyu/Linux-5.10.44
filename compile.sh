@@ -4,8 +4,8 @@ set -e # 遇到错误立即停止
 # ================= 配置区 =================
 # 内核源码目录名称 (请根据实际情况修改)
 KERNEL_DIR_NAME="linux-5.10.44"
-# 根文件系统镜像名称
-ROOTFS_IMG="rootfs.ext4"
+# 根文件系统镜像名称（Debian）
+ROOTFS_IMG="debian.ext4"
 # 目标模块路径 (内核内部路径)
 MODULE_REL_PATH="drivers/gpu/drm/virtio"
 # 当前运行内核的版本号 (用于安装路径)
@@ -20,17 +20,23 @@ SCRIPT_DIR=$(pwd)
 if [ -d "$SCRIPT_DIR/$KERNEL_DIR_NAME" ]; then
     # 情况A: 在 parent 目录 (比如 ~/Codes)
     KDIR="$SCRIPT_DIR/$KERNEL_DIR_NAME"
-    ROOTFS_PATH="$SCRIPT_DIR/$ROOTFS_IMG"
 elif [ -f "$SCRIPT_DIR/Kbuild" ] || [ -f "$SCRIPT_DIR/Makefile" ]; then
     # 情况B: 已经在 kernel 目录里 (比如 ~/Codes/linux-5.10.44)
     KDIR="$SCRIPT_DIR"
-    ROOTFS_PATH="$SCRIPT_DIR/../$ROOTFS_IMG"
 else
     echo "❌ 错误: 找不到内核源码目录，请确认脚本位置！"
     exit 1
 fi
 
+ROOTFS_PATH="$KDIR/$ROOTFS_IMG"
+
 echo "📂 Kernel Dir: $KDIR"
+
+if [ ! -f "$ROOTFS_PATH" ]; then
+    echo "❌ 找不到 rootfs: $ROOTFS_PATH"
+    echo "   请先运行: $KDIR/debian_rootfs.sh"
+    exit 1
+fi
 
 # 2. 检查内核是否已配置
 if [ ! -f "$KDIR/.config" ]; then
@@ -77,6 +83,9 @@ echo "🔨 正在编译 Virtio-GPU 模块..."
 touch "$KDIR/$MODULE_REL_PATH"/*.c
 make -C "$KDIR" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- M=$MODULE_REL_PATH modules -j$(nproc)
 
+echo "🔨 正在编译 virtio_dma_buf 模块..."
+make -C "$KDIR" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- M=drivers/virtio modules -j$(nproc)
+
 # 4. 安装模块到 RootFS
 echo "💾 正在安装模块..."
 MOUNT_POINT="/tmp/qemu_mnt_$(date +%s)"
@@ -87,33 +96,21 @@ sudo mount "$ROOTFS_PATH" $MOUNT_POINT
 # 创建目标目录 (防止目录不存在报错)
 TARGET_DIR="$MOUNT_POINT/lib/modules/$KERNEL_RELEASE/kernel/$MODULE_REL_PATH"
 sudo mkdir -p "$TARGET_DIR"
+sudo mkdir -p "$MOUNT_POINT/lib/modules/$KERNEL_RELEASE/kernel/drivers/virtio"
 
 # 拷贝 .ko 文件
 sudo cp "$KDIR/$MODULE_REL_PATH/virtio-gpu.ko" "$TARGET_DIR/"
+sudo cp "$KDIR/drivers/virtio/virtio_dma_buf.ko" "$MOUNT_POINT/lib/modules/$KERNEL_RELEASE/kernel/drivers/virtio/"
 echo "✅ 已拷贝: virtio-gpu.ko -> $TARGET_DIR"
+
+# 生成模块依赖，确保 modprobe 可用
+sudo depmod -a -b "$MOUNT_POINT" "$KERNEL_RELEASE"
+
+# 开机自动加载模块
+echo -e "virtio_dma_buf\nvirtio-gpu" | sudo tee "$MOUNT_POINT/etc/modules-load.d/virtio-gpu.conf" >/dev/null
+echo -e "virtio_dma_buf\nvirtio-gpu" | sudo tee -a "$MOUNT_POINT/etc/modules" >/dev/null
 
 sudo umount $MOUNT_POINT
 rm -rf $MOUNT_POINT
 
-# 5. 启动 QEMU
-echo "🚀 启动 QEMU..."
-
-KERNEL_IMAGE="$KDIR/arch/arm64/boot/Image"
-
-
-qemu-system-aarch64 \
-    -M virt \
-    -cpu cortex-a57 \
-    -m 4G \
-    -vga none \
-    -kernel "$KERNEL_IMAGE" \
-    -drive file="$ROOTFS_PATH",format=raw,id=hd0,if=none \
-    -device virtio-blk-device,drive=hd0 \
-    -append "root=/dev/vda rw console=tty0 earlycon ignore_loglevel" \
-    -device virtio-gpu-pci,iommu_platform=on,disable-legacy=on,addr=02.0,edid=on,xres=1024,yres=768 \
-    -device qemu-xhci \
-    -device usb-kbd \
-    -device usb-mouse \
-    -display gtk,show-cursor=on \
-    -serial stdio \
-    -dtb "$KDIR/qemu_final.dtb"
+echo "✅ 编译与安装完成，启动请运行 start.sh"

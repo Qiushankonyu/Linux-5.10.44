@@ -15,6 +15,7 @@ System.map
 vmlinux
 *.bin
 *.elf
+*.ext4
 
 # Build directories
 debian/
