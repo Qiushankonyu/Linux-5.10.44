@@ -75,16 +75,22 @@ rm -f "$KDIR/drivers/virtio/virtio_ring.o"
 echo "🏗️  正在重新编译内核核心 (Image)..."
 make -C "$KDIR" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- Image -j$(nproc)
 
+echo "🔗 同步模块符号表 (vmlinux.symvers -> Module.symvers)..."
+cp -f "$KDIR/vmlinux.symvers" "$KDIR/Module.symvers"
+
 # ... (后面接原来的 "3. 编译模块") ...
 
 # 3. 编译模块
+echo "🔨 正在编译 virtio_dma_buf 模块..."
+make -C "$KDIR" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- M=drivers/virtio modules -j$(nproc)
+
 echo "🔨 正在编译 Virtio-GPU 模块..."
 # 强制 touch 确保重新编译
 touch "$KDIR/$MODULE_REL_PATH"/*.c
-make -C "$KDIR" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- M=$MODULE_REL_PATH modules -j$(nproc)
-
-echo "🔨 正在编译 virtio_dma_buf 模块..."
-make -C "$KDIR" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- M=drivers/virtio modules -j$(nproc)
+make -C "$KDIR" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+    M=$MODULE_REL_PATH \
+    KBUILD_EXTRA_SYMBOLS="$KDIR/drivers/virtio/Module.symvers" \
+    modules -j$(nproc)
 
 # 4. 安装模块到 RootFS
 echo "💾 正在安装模块..."

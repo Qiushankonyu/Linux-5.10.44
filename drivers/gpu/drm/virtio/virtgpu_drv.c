@@ -99,38 +99,6 @@ static int virtio_gpu_pci_quirk(struct drm_device *dev,
 	return drm_dev_set_unique(dev, unique);
 }
 
-// static int virtio_gpu_probe(struct virtio_device *vdev)
-// {
-// 	struct drm_device *dev;
-// 	int ret;
-// 	dev = drm_dev_alloc(&driver, &vdev->dev);
-// 	if (IS_ERR(dev))
-// 		return PTR_ERR(dev);
-
-// 	vdev->priv = dev;
-
-// 	ret = virtio_gpu_pci_quirk(dev, vdev);
-// 	if (ret)
-// 		goto err_free;
-
-// 	ret = virtio_gpu_init(dev);
-// 	if (ret)
-// 		goto err_free;
-
-// 	ret = drm_dev_register(dev, 0);
-// 	if (ret)
-// 		goto err_deinit;
-
-// 	drm_fbdev_generic_setup(dev, 32);
-// 	return 0;
-
-// err_deinit:
-// 	virtio_gpu_deinit(dev);
-// err_free:
-// 	drm_dev_put(dev);
-// 	return ret;
-// }
-
 static int virtio_gpu_probe(struct virtio_device *vdev)
 {
 	struct drm_device *dev;

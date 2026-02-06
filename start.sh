@@ -70,7 +70,7 @@ qemu-system-aarch64 \
     -kernel "$KERNEL_IMAGE" \
     -drive file="$ROOTFS_PATH",format=raw,id=hd0,if=none \
     -device virtio-blk-device,drive=hd0 \
-    -append "root=/dev/vda rootfstype=ext4 rootwait rw console=ttyAMA0 console=tty0 earlycon ignore_loglevel modules-load=virtio_dma_buf,virtio_gpu,virtio_net ip=dhcp " \
+    -append "root=/dev/vda rootfstype=ext4 rootwait rw console=ttyAMA0 console=tty0 earlycon ignore_loglevel modules-load=virtio_dma_buf,virtio_gpu,virtio_net ip=dhcp video=Virtual-1:800x600@60" \
     -device "$GPU_DEVICE" \
     -device qemu-xhci \
     -device usb-kbd \

@@ -30,7 +30,7 @@
         /* 定义 VPU 共享内存区域，对应 config.yml 中的 shm0 */
         vpu_shm_region: vpu_shm@f0000000 {
             compatible = "shared-dma-pool";
-            reg = <0x0 0xf0000000 0x0 0x02000000>; /* 32MB at 0xF0000000 */
+            reg = <0x0 0xf0000000 0x0 0x08000000>; /* 32MB at 0xF0000000 */
             no-map; /* 不要创建通用的 CPU 映射，驱动会自己处理 */
             linux,cma-default; /* 可选：标记为 CMA 区域 */
         };

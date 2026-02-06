@@ -66,9 +66,9 @@ int virtio_gpu_mode_dumb_create(struct drm_file *file_priv,
 	int ret;
 	uint32_t pitch;
 
-	dev_info(dev->dev, "DUMB_CREATE: w=%u h=%u bpp=%u size=%llu\n",
-		 args->width, args->height, args->bpp,
-		 (unsigned long long)args->size);
+	dev_dbg(dev->dev, "DUMB_CREATE: w=%u h=%u bpp=%u size=%llu\n",
+		args->width, args->height, args->bpp,
+		(unsigned long long)args->size);
 
 	if (args->bpp != 32)
 		return -EINVAL;
@@ -88,8 +88,8 @@ int virtio_gpu_mode_dumb_create(struct drm_file *file_priv,
 		goto fail;
 
 	args->pitch = pitch;
-	dev_info(dev->dev, "DUMB_CREATE_OK: handle=%u pitch=%u size=%llu\n",
-		 args->handle, args->pitch, (unsigned long long)args->size);
+	dev_dbg(dev->dev, "DUMB_CREATE_OK: handle=%u pitch=%u size=%llu\n",
+		args->handle, args->pitch, (unsigned long long)args->size);
 	return ret;
 
 fail:
@@ -103,13 +103,13 @@ int virtio_gpu_mode_dumb_mmap(struct drm_file *file_priv,
 	struct drm_gem_object *gobj;
 
 	BUG_ON(!offset_p);
-	dev_info(dev->dev, "DUMB_MMAP: handle=%u\n", handle);
+	dev_dbg(dev->dev, "DUMB_MMAP: handle=%u\n", handle);
 	gobj = drm_gem_object_lookup(file_priv, handle);
 	if (gobj == NULL)
 		return -ENOENT;
 	*offset_p = drm_vma_node_offset_addr(&gobj->vma_node);
-	dev_info(dev->dev, "DUMB_MMAP_OK: handle=%u offset=0x%llx size=%zu\n",
-		 handle, (unsigned long long)*offset_p, gobj->size);
+	dev_dbg(dev->dev, "DUMB_MMAP_OK: handle=%u offset=0x%llx size=%zu\n",
+		handle, (unsigned long long)*offset_p, gobj->size);
 	drm_gem_object_put(gobj);
 	return 0;
 }

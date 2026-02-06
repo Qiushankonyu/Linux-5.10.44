@@ -109,31 +109,6 @@ void virtio_gpu_free_vbufs(struct virtio_gpu_device *vgdev)
 	vgdev->vbufs = NULL;
 }
 
-// static struct virtio_gpu_vbuffer *
-// virtio_gpu_get_vbuf(struct virtio_gpu_device *vgdev, int size, int resp_size,
-// 		    void *resp_buf, virtio_gpu_resp_cb resp_cb)
-// {
-// 	struct virtio_gpu_vbuffer *vbuf;
-
-// 	vbuf = kmem_cache_zalloc(vgdev->vbufs, GFP_KERNEL);
-// 	if (!vbuf)
-// 		return ERR_PTR(-ENOMEM);
-
-// 	BUG_ON(size > MAX_INLINE_CMD_SIZE ||
-// 	       size < sizeof(struct virtio_gpu_ctrl_hdr));
-// 	vbuf->buf = (void *)vbuf + sizeof(*vbuf);
-// 	vbuf->size = size;
-
-// 	vbuf->resp_cb = resp_cb;
-// 	vbuf->resp_size = resp_size;
-// 	if (resp_size <= MAX_INLINE_RESP_SIZE)
-// 		vbuf->resp_buf = (void *)vbuf->buf + size;
-// 	else
-// 		vbuf->resp_buf = resp_buf;
-// 	BUG_ON(!vbuf->resp_buf);
-// 	return vbuf;
-// }
-
 static struct virtio_gpu_vbuffer *
 virtio_gpu_get_vbuf(struct virtio_gpu_device *vgdev, int size, int resp_size,
 		    void *resp_buf, virtio_gpu_resp_cb resp_cb)

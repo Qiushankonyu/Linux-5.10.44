@@ -72,12 +72,11 @@ static int virtio_gpu_gem_mmap(struct drm_gem_object *obj,
 	unsigned long saved_pgoff = vma->vm_pgoff;
 	int ret;
 
-	dev_info(
-		vgdev->ddev->dev,
+	dev_dbg(vgdev->ddev->dev,
 		"MMAP: vm_pgoff=%lx start=%lx size=%lu obj=%zu dma=0x%llx vaddr=%p\n",
 		vma->vm_pgoff, start_pgoff, size, obj->size,
 		(unsigned long long)bo->dma_addr, bo->base.vaddr);
-	dev_info(vgdev->ddev->dev, "MMAP: mmap handler reached\n");
+	dev_dbg(vgdev->ddev->dev, "MMAP: mmap handler reached\n");
 
 	/* 1. 设置 VMA 标志 (DMA 内存必须设为 IO/PFNMAP) */
 	vma->vm_flags &= ~VM_PFNMAP;
@@ -100,8 +99,8 @@ static int virtio_gpu_gem_mmap(struct drm_gem_object *obj,
 	ret = dma_mmap_coherent(vgdev->vdev->dev.parent, vma, bo->base.vaddr,
 				bo->dma_addr, obj->size);
 	vma->vm_pgoff = saved_pgoff;
-	dev_info(vgdev->ddev->dev,
-		 "MMAP: dma_mmap_coherent ret=%d, mmap handler reached\n", ret);
+	dev_dbg(vgdev->ddev->dev,
+		"MMAP: dma_mmap_coherent ret=%d, mmap handler reached\n", ret);
 	if (!ret)
 		return 0;
 
@@ -114,8 +113,8 @@ static int virtio_gpu_gem_mmap(struct drm_gem_object *obj,
 
 	ret = remap_pfn_range(vma, vma->vm_start, phys_addr >> PAGE_SHIFT,
 			      PAGE_ALIGN(size), vma->vm_page_prot);
-	dev_info(vgdev->ddev->dev,
-		 "MMAP: remap_pfn_range ret=%d, mmap handler reached\n", ret);
+	dev_dbg(vgdev->ddev->dev,
+		"MMAP: remap_pfn_range ret=%d, mmap handler reached\n", ret);
 	return ret;
 }
 
@@ -309,11 +308,11 @@ struct drm_gem_object *virtio_gpu_create_object(struct drm_device *dev,
 
 	drm_gem_private_object_init(dev, obj, size);
 	bo->base.map_cached = true;
-	dev_info(dev->dev, "GEM_CREATE: obj=%p size=%zu\n", obj, size);
+	dev_dbg(dev->dev, "GEM_CREATE: obj=%p size=%zu\n", obj, size);
 
 	ret = drm_gem_create_mmap_offset(obj);
-	dev_info(dev->dev, "GEM_CREATE: mmap_offset ret=%d offset=0x%lx\n", ret,
-		 drm_vma_node_start(&obj->vma_node));
+	dev_dbg(dev->dev, "GEM_CREATE: mmap_offset ret=%d offset=0x%lx\n", ret,
+		drm_vma_node_start(&obj->vma_node));
 	if (ret) {
 		drm_gem_object_release(obj);
 		kfree(bo);
@@ -346,10 +345,10 @@ int virtio_gpu_object_create(struct virtio_gpu_device *vgdev,
 		return PTR_ERR(gem_obj);
 	bo = gem_to_virtio_gpu_obj(gem_obj);
 
-	dev_info(vgdev->ddev->dev,
-		 "OBJ_CREATE: size=%lu width=%u height=%u fmt=0x%x dumb=%d\n",
-		 (unsigned long)params->size, params->width, params->height,
-		 params->format, params->dumb);
+	dev_dbg(vgdev->ddev->dev,
+		"OBJ_CREATE: size=%lu width=%u height=%u fmt=0x%x dumb=%d\n",
+		(unsigned long)params->size, params->width, params->height,
+		params->format, params->dumb);
 	/* 2. DMA Alloc */
 	vaddr = dma_alloc_coherent(vgdev->vdev->dev.parent, params->size,
 				   &bo->dma_addr, GFP_KERNEL);
@@ -365,9 +364,8 @@ int virtio_gpu_object_create(struct virtio_gpu_device *vgdev,
 		ret = -ENOMEM;
 		goto err_free_dma;
 	}
-	dev_info(vgdev->ddev->dev,
-		 "OBJ_CREATE: dma_alloc vaddr=%p dma=0x%llx\n", vaddr,
-		 (unsigned long long)bo->dma_addr);
+	dev_dbg(vgdev->ddev->dev, "OBJ_CREATE: dma_alloc vaddr=%p dma=0x%llx\n",
+		vaddr, (unsigned long long)bo->dma_addr);
 	ret = sg_alloc_table(sgt, 1, GFP_KERNEL);
 	if (ret) {
 		kfree(sgt);
@@ -389,23 +387,23 @@ int virtio_gpu_object_create(struct virtio_gpu_device *vgdev,
 		goto err_free_sgt;
 
 	ents = virtio_gpu_mem_entries_from_sgt(bo->base.sgt, &nents);
-	dev_info(vgdev->ddev->dev, "OBJ_CREATE: sgt dma=0x%llx len=%u\n",
-		 (unsigned long long)bo->dma_addr, sg_dma_len(sg));
+	dev_dbg(vgdev->ddev->dev, "OBJ_CREATE: sgt dma=0x%llx len=%u\n",
+		(unsigned long long)bo->dma_addr, sg_dma_len(sg));
 	if (!ents) {
 		ret = -ENOMEM;
 		goto err_put_id;
 	}
 
-	dev_info(vgdev->ddev->dev, "OBJ_CREATE: hw_res_handle=%u\n",
-		 bo->hw_res_handle);
+	dev_dbg(vgdev->ddev->dev, "OBJ_CREATE: hw_res_handle=%u\n",
+		bo->hw_res_handle);
 	bo->dumb = params->dumb;
 
 	if (fence) {
 		ret = -ENOMEM;
 		objs = virtio_gpu_array_alloc(1);
 		if (!objs)
-			dev_info(vgdev->ddev->dev,
-				 "OBJ_CREATE: mem_entries nents=%u\n", nents);
+			dev_dbg(vgdev->ddev->dev,
+				"OBJ_CREATE: mem_entries nents=%u\n", nents);
 		goto err_put_id;
 		virtio_gpu_array_add_obj(objs, &bo->base.base);
 		ret = virtio_gpu_array_lock_resv(objs);
@@ -426,10 +424,10 @@ int virtio_gpu_object_create(struct virtio_gpu_device *vgdev,
 
 err_put_objs:
 	virtio_gpu_array_put_free(objs);
-	dev_info(vgdev->ddev->dev, "OBJ_CREATE: resource created\n");
+	dev_dbg(vgdev->ddev->dev, "OBJ_CREATE: resource created\n");
 err_put_id:
 	virtio_gpu_resource_id_put(vgdev, bo->hw_res_handle);
-	dev_info(vgdev->ddev->dev, "OBJ_CREATE: object attached\n");
+	dev_dbg(vgdev->ddev->dev, "OBJ_CREATE: object attached\n");
 err_free_sgt:
 	sg_free_table(sgt);
 	kfree(sgt);
