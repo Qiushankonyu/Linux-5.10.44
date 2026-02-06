@@ -9,12 +9,12 @@ ROOTFS_SIZE="8G"
 MOUNT_POINT="/tmp/debian_rootfs_$(date +%s)"
 
 if ! command -v debootstrap >/dev/null 2>&1; then
-  echo "❌ 缺少 debootstrap，请先安装：sudo apt-get install -y debootstrap"
+  echo "❌ 缺少 debootstrap,请先安装:sudo apt-get install -y debootstrap"
   exit 1
 fi
 
 if ! command -v qemu-aarch64-static >/dev/null 2>&1; then
-  echo "❌ 缺少 qemu-aarch64-static，请先安装：sudo apt-get install -y qemu-user-static"
+  echo "❌ 缺少 qemu-aarch64-static,请先安装:sudo apt-get install -y qemu-user-static"
   exit 1
 fi
 
