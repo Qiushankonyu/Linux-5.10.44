@@ -45,8 +45,8 @@ static void virtio_gpu_free_shared_object(struct drm_gem_object *obj)
 	if (bo->base.vaddr && bo->dma_addr) {
 		dev_info(obj->dev->dev, "DEBUG: Freeing DMA mem: vaddr=%p\n",
 			 bo->base.vaddr);
-		dma_free_coherent(vgdev->dma_dev, obj->size,
-				  bo->base.vaddr, bo->dma_addr);
+		dma_free_coherent(vgdev->dma_dev, obj->size, bo->base.vaddr,
+				  bo->dma_addr);
 		bo->base.vaddr = NULL;
 	}
 
@@ -351,8 +351,8 @@ int virtio_gpu_object_create(struct virtio_gpu_device *vgdev,
 		 (unsigned long)params->size, params->width, params->height,
 		 params->format, params->dumb);
 	/* 2. DMA Alloc */
-	vaddr = dma_alloc_coherent(vgdev->dma_dev, params->size,
-				   &bo->dma_addr, GFP_KERNEL);
+	vaddr = dma_alloc_coherent(vgdev->dma_dev, params->size, &bo->dma_addr,
+				   GFP_KERNEL);
 	if (!vaddr) {
 		ret = -ENOMEM;
 		goto err_free_gem;
@@ -368,7 +368,8 @@ int virtio_gpu_object_create(struct virtio_gpu_device *vgdev,
 				(unsigned long long)bo->dma_addr,
 				(unsigned long)params->size,
 				(unsigned long long)vgdev->vpu_shm_start,
-				(unsigned long long)(vgdev->vpu_shm_start + vgdev->vpu_shm_size));
+				(unsigned long long)(vgdev->vpu_shm_start +
+						     vgdev->vpu_shm_size));
 			dma_free_coherent(vgdev->dma_dev, params->size, vaddr,
 					  bo->dma_addr);
 			ret = -EINVAL;

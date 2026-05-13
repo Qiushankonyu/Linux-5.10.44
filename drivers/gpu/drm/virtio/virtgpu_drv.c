@@ -125,8 +125,7 @@ static int virtio_gpu_probe(struct virtio_device *vdev)
 
 	dev_info(&vdev->dev,
 		 "TRANSPORT: %s (virtio=%s, parent=%s, dma_dev=%s)\n",
-		 is_pci_transport ? "PCI" : "MMIO",
-		 dev_name(&vdev->dev),
+		 is_pci_transport ? "PCI" : "MMIO", dev_name(&vdev->dev),
 		 vdev->dev.parent ? dev_name(vdev->dev.parent) : "none",
 		 dev_name(dma_dev));
 
@@ -171,10 +170,12 @@ static int virtio_gpu_probe(struct virtio_device *vdev)
 		ret = of_reserved_mem_device_init_by_idx(dma_dev, np, 0);
 		if (ret && dma_dev != &vdev->dev) {
 			/* 某些平台 parent 不可用时，回退到 virtio 设备本身 */
-			dev_warn(&vdev->dev,
-				 "Reserved memory init on parent failed (%d), fallback to virtio device\n",
-				 ret);
-			ret = of_reserved_mem_device_init_by_idx(&vdev->dev, np, 0);
+			dev_warn(
+				&vdev->dev,
+				"Reserved memory init on parent failed (%d), fallback to virtio device\n",
+				ret);
+			ret = of_reserved_mem_device_init_by_idx(&vdev->dev, np,
+								 0);
 		}
 		if (ret) {
 			dev_err(&vdev->dev,
@@ -188,12 +189,13 @@ static int virtio_gpu_probe(struct virtio_device *vdev)
 				int ret2;
 
 				/* 同时绑定 virtio 设备，覆盖前端对象分配路径 */
-				ret2 = of_reserved_mem_device_init_by_idx(&vdev->dev,
-								  np, 0);
+				ret2 = of_reserved_mem_device_init_by_idx(
+					&vdev->dev, np, 0);
 				if (ret2)
-					dev_warn(&vdev->dev,
-						 "Reserved memory init on virtio device failed (%d)\n",
-						 ret2);
+					dev_warn(
+						&vdev->dev,
+						"Reserved memory init on virtio device failed (%d)\n",
+						ret2);
 			}
 			dev_info(&vdev->dev,
 				 "Reserved memory bound on %s transport\n",

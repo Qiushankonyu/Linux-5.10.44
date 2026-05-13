@@ -33,14 +33,13 @@
 
 static void virtio_gpu_config_changed_work_func(struct work_struct *work)
 {
-	struct virtio_gpu_device *vgdev =
-		container_of(work, struct virtio_gpu_device,
-			     config_changed_work);
+	struct virtio_gpu_device *vgdev = container_of(
+		work, struct virtio_gpu_device, config_changed_work);
 	u32 events_read, events_clear = 0;
 
 	/* read the config space */
-	virtio_cread_le(vgdev->vdev, struct virtio_gpu_config,
-			events_read, &events_read);
+	virtio_cread_le(vgdev->vdev, struct virtio_gpu_config, events_read,
+			&events_read);
 	if (events_read & VIRTIO_GPU_EVENT_DISPLAY) {
 		if (vgdev->has_edid)
 			virtio_gpu_cmd_get_edids(vgdev);
@@ -49,8 +48,8 @@ static void virtio_gpu_config_changed_work_func(struct work_struct *work)
 		drm_helper_hpd_irq_event(vgdev->ddev);
 		events_clear |= VIRTIO_GPU_EVENT_DISPLAY;
 	}
-	virtio_cwrite_le(vgdev->vdev, struct virtio_gpu_config,
-			 events_clear, &events_clear);
+	virtio_cwrite_le(vgdev->vdev, struct virtio_gpu_config, events_clear,
+			 &events_clear);
 }
 
 static void virtio_gpu_init_vq(struct virtio_gpu_queue *vgvq,
@@ -66,9 +65,8 @@ static void virtio_gpu_get_capsets(struct virtio_gpu_device *vgdev,
 {
 	int i, ret;
 
-	vgdev->capsets = kcalloc(num_capsets,
-				 sizeof(struct virtio_gpu_drv_capset),
-				 GFP_KERNEL);
+	vgdev->capsets = kcalloc(
+		num_capsets, sizeof(struct virtio_gpu_drv_capset), GFP_KERNEL);
 	if (!vgdev->capsets) {
 		DRM_ERROR("failed to allocate cap sets\n");
 		return;
@@ -86,9 +84,8 @@ static void virtio_gpu_get_capsets(struct virtio_gpu_device *vgdev,
 			spin_unlock(&vgdev->display_info_lock);
 			return;
 		}
-		DRM_INFO("cap set %d: id %d, max-version %d, max-size %d\n",
-			 i, vgdev->capsets[i].id,
-			 vgdev->capsets[i].max_version,
+		DRM_INFO("cap set %d: id %d, max-version %d, max-size %d\n", i,
+			 vgdev->capsets[i].id, vgdev->capsets[i].max_version,
 			 vgdev->capsets[i].max_size);
 	}
 	vgdev->num_capsets = num_capsets;
@@ -96,10 +93,9 @@ static void virtio_gpu_get_capsets(struct virtio_gpu_device *vgdev,
 
 int virtio_gpu_init(struct drm_device *dev)
 {
-	static vq_callback_t *callbacks[] = {
-		virtio_gpu_ctrl_ack, virtio_gpu_cursor_ack
-	};
-	static const char * const names[] = { "control", "cursor" };
+	static vq_callback_t *callbacks[] = { virtio_gpu_ctrl_ack,
+					      virtio_gpu_cursor_ack };
+	static const char *const names[] = { "control", "cursor" };
 
 	struct virtio_gpu_device *vgdev;
 	/* this will expand later */
@@ -138,8 +134,7 @@ int virtio_gpu_init(struct drm_device *dev)
 	INIT_WORK(&vgdev->config_changed_work,
 		  virtio_gpu_config_changed_work_func);
 
-	INIT_WORK(&vgdev->obj_free_work,
-		  virtio_gpu_array_put_free_work);
+	INIT_WORK(&vgdev->obj_free_work, virtio_gpu_array_put_free_work);
 	INIT_LIST_HEAD(&vgdev->obj_free_list);
 	spin_lock_init(&vgdev->obj_free_lock);
 
@@ -157,9 +152,8 @@ int virtio_gpu_init(struct drm_device *dev)
 		vgdev->has_resource_assign_uuid = true;
 	}
 
-	DRM_INFO("features: %cvirgl %cedid\n",
-		 vgdev->has_virgl_3d ? '+' : '-',
-		 vgdev->has_edid     ? '+' : '-');
+	DRM_INFO("features: %cvirgl %cedid\n", vgdev->has_virgl_3d ? '+' : '-',
+		 vgdev->has_edid ? '+' : '-');
 
 	ret = virtio_find_vqs(vgdev->vdev, 2, vqs, callbacks, names, NULL);
 	if (ret) {
@@ -175,10 +169,10 @@ int virtio_gpu_init(struct drm_device *dev)
 	}
 
 	/* get display info */
-	virtio_cread_le(vgdev->vdev, struct virtio_gpu_config,
-			num_scanouts, &num_scanouts);
-	vgdev->num_scanouts = min_t(uint32_t, num_scanouts,
-				    VIRTIO_GPU_MAX_SCANOUTS);
+	virtio_cread_le(vgdev->vdev, struct virtio_gpu_config, num_scanouts,
+			&num_scanouts);
+	vgdev->num_scanouts =
+		min_t(uint32_t, num_scanouts, VIRTIO_GPU_MAX_SCANOUTS);
 	if (!vgdev->num_scanouts) {
 		DRM_ERROR("num_scanouts is zero\n");
 		ret = -EINVAL;
@@ -186,8 +180,8 @@ int virtio_gpu_init(struct drm_device *dev)
 	}
 	DRM_INFO("number of scanouts: %d\n", num_scanouts);
 
-	virtio_cread_le(vgdev->vdev, struct virtio_gpu_config,
-			num_capsets, &num_capsets);
+	virtio_cread_le(vgdev->vdev, struct virtio_gpu_config, num_capsets,
+			&num_capsets);
 	DRM_INFO("number of cap sets: %d\n", num_capsets);
 
 	ret = virtio_gpu_modeset_init(vgdev);
@@ -221,7 +215,7 @@ static void virtio_gpu_cleanup_cap_cache(struct virtio_gpu_device *vgdev)
 {
 	struct virtio_gpu_drv_cap_cache *cache_ent, *tmp;
 
-	list_for_each_entry_safe(cache_ent, tmp, &vgdev->cap_cache, head) {
+	list_for_each_entry_safe (cache_ent, tmp, &vgdev->cap_cache, head) {
 		kfree(cache_ent->caps_cache);
 		kfree(cache_ent);
 	}
