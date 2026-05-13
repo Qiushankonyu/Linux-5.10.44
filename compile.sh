@@ -45,7 +45,7 @@ if [ ! -f "$KDIR/.config" ]; then
 fi
 
 # 检查是否需要 prepare
-if [ ! -f "$KDIR/include/generated/autoconf.h" ]; then
+if [ ! -f "$KDIR/include/generated/autoconf.h" ] || [ ! -f "$KDIR/scripts/module.lds" ]; then
     echo "⚙️ 正在准备编译环境 (modules_prepare)..."
     make -C "$KDIR" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare
 fi

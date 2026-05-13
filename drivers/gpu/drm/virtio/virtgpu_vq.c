@@ -136,7 +136,7 @@ virtio_gpu_get_vbuf(struct virtio_gpu_device *vgdev, int size, int resp_size,
      * 这确保了数据落在 0xF0000000 区域
      */
 	shared_mem =
-		dma_alloc_coherent(vgdev->vdev->dev.parent, total_alloc_size,
+		dma_alloc_coherent(vgdev->dma_dev, total_alloc_size,
 				   &dma_addr, GFP_KERNEL);
 	if (!shared_mem) {
 		/* 分配失败，回退释放结构体 */
@@ -173,28 +173,24 @@ virtio_gpu_get_vbuf(struct virtio_gpu_device *vgdev, int size, int resp_size,
 
 	/* 6. [动态验证逻辑] 验证地址是否正确 */
 	{
-		static bool verify_once = false;
-		if (!verify_once) {
-			dev_info(&vgdev->vdev->dev,
-				 "VERIFY: get_vbuf PA: 0x%llx (Total: %d)\n",
-				 (unsigned long long)dma_addr,
-				 total_alloc_size);
-
-			/* 使用 probe 阶段保存的 start 进行判定 */
-			if (vgdev->vpu_shm_size > 0) {
-				if (dma_addr >= vgdev->vpu_shm_start &&
-				    dma_addr < vgdev->vpu_shm_start +
-						       vgdev->vpu_shm_size) {
-					dev_info(
-						&vgdev->vdev->dev,
-						"PASS: Command Buffer in Shared Memory!\n");
-				} else {
-					dev_err(&vgdev->vdev->dev,
-						"FAIL: Buffer OUTSIDE Shared Memory! (0x%llx)\n",
-						(unsigned long long)dma_addr);
-				}
+		/* 使用 probe 阶段保存的 start 进行判定。
+		 * 如果启用了 shared-memory 约束，则必须严格落在池子里。
+		 */
+		if (vgdev->vpu_shm_size > 0) {
+			if (dma_addr < vgdev->vpu_shm_start ||
+			    dma_addr + total_alloc_size >
+				    vgdev->vpu_shm_start + vgdev->vpu_shm_size) {
+				dev_err(&vgdev->vdev->dev,
+					"FAIL: get_vbuf outside shared-memory (dma=0x%llx size=0x%x shm=[0x%llx-0x%llx))\n",
+					(unsigned long long)dma_addr,
+					total_alloc_size,
+					(unsigned long long)vgdev->vpu_shm_start,
+					(unsigned long long)(vgdev->vpu_shm_start + vgdev->vpu_shm_size));
+				dma_free_coherent(vgdev->dma_dev, total_alloc_size,
+						  shared_mem, dma_addr);
+				kmem_cache_free(vgdev->vbufs, vbuf);
+				return ERR_PTR(-EINVAL);
 			}
-			verify_once = true;
 		}
 	}
 
@@ -275,8 +271,15 @@ static void *virtio_gpu_alloc_cmd_cb(struct virtio_gpu_device *vgdev,
 static void free_vbuf(struct virtio_gpu_device *vgdev,
 		      struct virtio_gpu_vbuffer *vbuf)
 {
-	if (vbuf->data_buf && vbuf->data_buf != vbuf->buf)
+	if (vbuf->data_dma_addr) {
+		dma_free_coherent(vgdev->dma_dev, vbuf->data_alloc_size,
+				  vbuf->data_buf, vbuf->data_dma_addr);
+		vbuf->data_dma_addr = 0;
+		vbuf->data_alloc_size = 0;
+		vbuf->data_buf = NULL;
+	} else if (vbuf->data_buf && vbuf->data_buf != vbuf->buf) {
 		kvfree(vbuf->data_buf);
+	}
 
 	/* [修改] 释放共享内存区域 */
 	/* * 原代码分别处理 resp_buf 和 data_buf。
@@ -284,7 +287,7 @@ static void free_vbuf(struct virtio_gpu_device *vgdev,
      */
 	if (vbuf->buf && vbuf->dma_addr) {
 		/* 必须使用 parent 设备，大小必须是 alloc 时的大小 */
-		dma_free_coherent(vgdev->vdev->dev.parent, vbuf->total_size,
+		dma_free_coherent(vgdev->dma_dev, vbuf->total_size,
 				  vbuf->buf, vbuf->dma_addr);
 	}
 
@@ -391,7 +394,8 @@ void virtio_gpu_dequeue_cursor_func(struct work_struct *work)
 }
 
 /* Create sg_table from a vmalloc'd buffer. */
-static struct sg_table *vmalloc_to_sgt(char *data, uint32_t size, int *sg_ents)
+static __maybe_unused struct sg_table *
+vmalloc_to_sgt(char *data, uint32_t size, int *sg_ents)
 {
 	int ret, s, i;
 	struct sg_table *sgt;
@@ -557,36 +561,53 @@ static int virtio_gpu_queue_fenced_ctrl_buffer(struct virtio_gpu_device *vgdev,
 	sgs[outcnt] = &vcmd;
 	outcnt++;
 
-	/* set up vout */
-	/* 数据负载部分：通常用于 2D 传输。如果涉及共享内存，建议保持 vmalloc 逻辑
-     * 或者如果确定 data_buf 也在共享区，也应使用 fill_sg。
-     * 目前阶段，为了解决 Bogus Descriptor，主要是 vcmd 和 vresp。
-     * 这里的逻辑暂时保留，防止破坏复杂命令的结构。
-     */
+	/* set up vout
+	 * Type-1/shared-memory 场景：后端只能访问 reserved-memory。
+	 * 因此任何通过 virtqueue 传输的 vout payload 都必须在共享 DMA 池中。
+	 */
 	if (vbuf->data_size) {
-		if (is_vmalloc_addr(vbuf->data_buf)) {
-			int sg_ents;
-			sgt = vmalloc_to_sgt(vbuf->data_buf, vbuf->data_size,
-					     &sg_ents);
-			if (!sgt) {
+		if (!vbuf->data_dma_addr) {
+			dma_addr_t data_dma;
+			void *shared_data;
+
+			shared_data = dma_alloc_coherent(vgdev->dma_dev, vbuf->data_size,
+						 &data_dma, GFP_KERNEL);
+			if (!shared_data) {
 				if (fence && vbuf->objs)
-					virtio_gpu_array_unlock_resv(
-						vbuf->objs);
-				return -1;
+					virtio_gpu_array_unlock_resv(vbuf->objs);
+				free_vbuf(vgdev, vbuf);
+				return -ENOMEM;
 			}
 
-			elemcnt += sg_ents;
-			sgs[outcnt] = sgt->sgl;
-		} else {
-			/* [可选优化] 如果进入这里，说明不是 vmalloc。
-             * 如果 data_buf 也是 dma_alloc_coherent 出来的，
-             * 使用 sg_init_one 依然有风险。
-             * 但绝大多数命令 data_size 为 0，所以这里暂时不动即可。
-             */
-			sg_init_one(&vout, vbuf->data_buf, vbuf->data_size);
-			elemcnt++;
-			sgs[outcnt] = &vout;
+			if (vgdev->vpu_shm_size > 0) {
+				if (data_dma < vgdev->vpu_shm_start ||
+				    data_dma + vbuf->data_size >
+					    vgdev->vpu_shm_start + vgdev->vpu_shm_size) {
+					dev_err(&vgdev->vdev->dev,
+						"FAIL: vout outside shared-memory (dma=0x%llx size=0x%x)\n",
+						(unsigned long long)data_dma,
+						vbuf->data_size);
+					dma_free_coherent(vgdev->dma_dev, vbuf->data_size,
+							  shared_data, data_dma);
+					if (fence && vbuf->objs)
+						virtio_gpu_array_unlock_resv(vbuf->objs);
+					free_vbuf(vgdev, vbuf);
+					return -EINVAL;
+				}
+			}
+
+			memcpy(shared_data, vbuf->data_buf, vbuf->data_size);
+			if (vbuf->data_buf != vbuf->buf)
+				kvfree(vbuf->data_buf);
+
+			vbuf->data_buf = shared_data;
+			vbuf->data_dma_addr = data_dma;
+			vbuf->data_alloc_size = vbuf->data_size;
 		}
+
+		virtio_gpu_fill_sg(&vout, vbuf->data_dma_addr, vbuf->data_size);
+		elemcnt++;
+		sgs[outcnt] = &vout;
 		outcnt++;
 	}
 
@@ -837,7 +858,7 @@ void virtio_gpu_cmd_transfer_to_host_2d(struct virtio_gpu_device *vgdev,
 	bool use_dma_api = !virtio_has_dma_quirk(vgdev->vdev);
 
 	if (use_dma_api && bo->base.sgt)
-		dma_sync_sgtable_for_device(vgdev->vdev->dev.parent,
+		dma_sync_sgtable_for_device(vgdev->dma_dev,
 					    bo->base.sgt, DMA_TO_DEVICE);
 
 	cmd_p = virtio_gpu_alloc_cmd(vgdev, &vbuf, sizeof(*cmd_p));
@@ -872,6 +893,7 @@ static void virtio_gpu_cmd_resource_attach_backing(
 
 	vbuf->data_buf = ents;
 	vbuf->data_size = sizeof(*ents) * nents;
+	/* ents must be readable by backend; stage/copy will happen in queue path */
 
 	virtio_gpu_queue_fenced_ctrl_buffer(vgdev, vbuf, fence);
 }
@@ -995,17 +1017,11 @@ int virtio_gpu_cmd_get_display_info(struct virtio_gpu_device *vgdev)
 {
 	struct virtio_gpu_ctrl_hdr *cmd_p;
 	struct virtio_gpu_vbuffer *vbuf;
-	void *resp_buf;
-
-	resp_buf = kzalloc(sizeof(struct virtio_gpu_resp_display_info),
-			   GFP_KERNEL);
-	if (!resp_buf)
-		return -ENOMEM;
 
 	cmd_p = virtio_gpu_alloc_cmd_resp(
 		vgdev, &virtio_gpu_cmd_get_display_info_cb, &vbuf,
 		sizeof(*cmd_p), sizeof(struct virtio_gpu_resp_display_info),
-		resp_buf);
+		NULL);
 	memset(cmd_p, 0, sizeof(*cmd_p));
 
 	vgdev->display_info_pending = true;
@@ -1018,17 +1034,11 @@ int virtio_gpu_cmd_get_capset_info(struct virtio_gpu_device *vgdev, int idx)
 {
 	struct virtio_gpu_get_capset_info *cmd_p;
 	struct virtio_gpu_vbuffer *vbuf;
-	void *resp_buf;
-
-	resp_buf =
-		kzalloc(sizeof(struct virtio_gpu_resp_capset_info), GFP_KERNEL);
-	if (!resp_buf)
-		return -ENOMEM;
 
 	cmd_p = virtio_gpu_alloc_cmd_resp(
 		vgdev, &virtio_gpu_cmd_get_capset_info_cb, &vbuf,
 		sizeof(*cmd_p), sizeof(struct virtio_gpu_resp_capset_info),
-		resp_buf);
+		NULL);
 	memset(cmd_p, 0, sizeof(*cmd_p));
 
 	cmd_p->hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_GET_CAPSET_INFO);
@@ -1046,7 +1056,6 @@ int virtio_gpu_cmd_get_capset(struct virtio_gpu_device *vgdev, int idx,
 	int max_size;
 	struct virtio_gpu_drv_cap_cache *cache_ent;
 	struct virtio_gpu_drv_cap_cache *search_ent;
-	void *resp_buf;
 
 	*cache_p = NULL;
 
@@ -1063,14 +1072,6 @@ int virtio_gpu_cmd_get_capset(struct virtio_gpu_device *vgdev, int idx,
 	max_size = vgdev->capsets[idx].max_size;
 	cache_ent->caps_cache = kmalloc(max_size, GFP_KERNEL);
 	if (!cache_ent->caps_cache) {
-		kfree(cache_ent);
-		return -ENOMEM;
-	}
-
-	resp_buf = kzalloc(sizeof(struct virtio_gpu_resp_capset) + max_size,
-			   GFP_KERNEL);
-	if (!resp_buf) {
-		kfree(cache_ent->caps_cache);
 		kfree(cache_ent);
 		return -ENOMEM;
 	}
@@ -1094,7 +1095,6 @@ int virtio_gpu_cmd_get_capset(struct virtio_gpu_device *vgdev, int idx,
 
 	if (*cache_p) {
 		/* Entry was found, so free everything that was just created. */
-		kfree(resp_buf);
 		kfree(cache_ent->caps_cache);
 		kfree(cache_ent);
 		return 0;
@@ -1102,7 +1102,7 @@ int virtio_gpu_cmd_get_capset(struct virtio_gpu_device *vgdev, int idx,
 
 	cmd_p = virtio_gpu_alloc_cmd_resp(
 		vgdev, &virtio_gpu_cmd_capset_cb, &vbuf, sizeof(*cmd_p),
-		sizeof(struct virtio_gpu_resp_capset) + max_size, resp_buf);
+		sizeof(struct virtio_gpu_resp_capset) + max_size, NULL);
 	cmd_p->hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_GET_CAPSET);
 	cmd_p->capset_id = cpu_to_le32(vgdev->capsets[idx].id);
 	cmd_p->capset_version = cpu_to_le32(version);
@@ -1116,22 +1116,16 @@ int virtio_gpu_cmd_get_edids(struct virtio_gpu_device *vgdev)
 {
 	struct virtio_gpu_cmd_get_edid *cmd_p;
 	struct virtio_gpu_vbuffer *vbuf;
-	void *resp_buf;
 	int scanout;
 
 	if (WARN_ON(!vgdev->has_edid))
 		return -EINVAL;
 
 	for (scanout = 0; scanout < vgdev->num_scanouts; scanout++) {
-		resp_buf = kzalloc(sizeof(struct virtio_gpu_resp_edid),
-				   GFP_KERNEL);
-		if (!resp_buf)
-			return -ENOMEM;
-
 		cmd_p = virtio_gpu_alloc_cmd_resp(
 			vgdev, &virtio_gpu_cmd_get_edid_cb, &vbuf,
 			sizeof(*cmd_p), sizeof(struct virtio_gpu_resp_edid),
-			resp_buf);
+			NULL);
 		cmd_p->hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_GET_EDID);
 		cmd_p->scanout = cpu_to_le32(scanout);
 		virtio_gpu_queue_ctrl_buffer(vgdev, vbuf);
@@ -1252,7 +1246,7 @@ void virtio_gpu_cmd_transfer_to_host_3d(struct virtio_gpu_device *vgdev,
 	bool use_dma_api = !virtio_has_dma_quirk(vgdev->vdev);
 
 	if (use_dma_api && bo->base.sgt)
-		dma_sync_sgtable_for_device(vgdev->vdev->dev.parent,
+		dma_sync_sgtable_for_device(vgdev->dma_dev,
 					    bo->base.sgt, DMA_TO_DEVICE);
 
 	cmd_p = virtio_gpu_alloc_cmd(vgdev, &vbuf, sizeof(*cmd_p));
@@ -1377,20 +1371,9 @@ int virtio_gpu_cmd_resource_assign_uuid(struct virtio_gpu_device *vgdev,
 	struct virtio_gpu_object *bo = gem_to_virtio_gpu_obj(objs->objs[0]);
 	struct virtio_gpu_resource_assign_uuid *cmd_p;
 	struct virtio_gpu_vbuffer *vbuf;
-	struct virtio_gpu_resp_resource_uuid *resp_buf;
-
-	resp_buf = kzalloc(sizeof(*resp_buf), GFP_KERNEL);
-	if (!resp_buf) {
-		spin_lock(&vgdev->resource_export_lock);
-		bo->uuid_state = UUID_INITIALIZATION_FAILED;
-		spin_unlock(&vgdev->resource_export_lock);
-		virtio_gpu_array_put_free(objs);
-		return -ENOMEM;
-	}
-
 	cmd_p = virtio_gpu_alloc_cmd_resp(
 		vgdev, virtio_gpu_cmd_resource_uuid_cb, &vbuf, sizeof(*cmd_p),
-		sizeof(struct virtio_gpu_resp_resource_uuid), resp_buf);
+		sizeof(struct virtio_gpu_resp_resource_uuid), NULL);
 	memset(cmd_p, 0, sizeof(*cmd_p));
 
 	cmd_p->hdr.type = cpu_to_le32(VIRTIO_GPU_CMD_RESOURCE_ASSIGN_UUID);

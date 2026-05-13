@@ -18,7 +18,7 @@
 	};
 
 	memory@40000000 {
-		reg = <0x00 0x40000000 0x01 0x00>;
+		reg = <0x00 0x40000000 0x00 0x10000000>;
 		device_type = "memory";
 	};
 
@@ -28,9 +28,9 @@
         ranges;
 
         /* 定义 VPU 共享内存区域，对应 config.yml 中的 shm0 */
-        vpu_shm_region: vpu_shm@f0000000 {
+        vpu_shm_region: vpu_shm@4e000000 {
             compatible = "shared-dma-pool";
-            reg = <0x0 0xf0000000 0x0 0x08000000>; /* 32MB at 0xF0000000 */
+            reg = <0x00 0x4e000000 0x00 0x02000000>; /* 32MB at 0x4E000000 */
             no-map; /* 不要创建通用的 CPU 映射，驱动会自己处理 */
             linux,cma-default; /* 可选：标记为 CMA 区域 */
         };
@@ -142,7 +142,6 @@
 		reg = <0x00 0xa001600 0x00 0x200>;
 		compatible = "virtio,mmio";
 	};
-
 	virtio_mmio@a001800 {
 		dma-coherent;
 		interrupts = <0x00 0x1c 0x01>;

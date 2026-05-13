@@ -118,6 +118,10 @@ int virtio_gpu_init(struct drm_device *dev)
 	dev->dev_private = vgdev;
 	vgdev->vdev = dev_to_virtio(dev->dev);
 	vgdev->dev = dev->dev;
+	if (vgdev->vdev->dev.parent)
+		vgdev->dma_dev = vgdev->vdev->dev.parent;
+	else
+		vgdev->dma_dev = &vgdev->vdev->dev;
 
 	spin_lock_init(&vgdev->display_info_lock);
 	spin_lock_init(&vgdev->resource_export_lock);
@@ -238,6 +242,9 @@ void virtio_gpu_deinit(struct drm_device *dev)
 void virtio_gpu_release(struct drm_device *dev)
 {
 	struct virtio_gpu_device *vgdev = dev->dev_private;
+
+	if (!vgdev)
+		return;
 
 	virtio_gpu_modeset_fini(vgdev);
 	virtio_gpu_free_vbufs(vgdev);

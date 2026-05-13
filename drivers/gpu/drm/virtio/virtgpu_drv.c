@@ -105,6 +105,9 @@ static int virtio_gpu_probe(struct virtio_device *vdev)
 	int ret;
 	struct device_node *np;
 	struct virtio_gpu_device *vgdev;
+	struct device *dma_dev;
+	bool is_pci_transport;
+	bool require_shm;
 
 	/* [新增] 局部变量，用于临时保存解析结果 */
 	phys_addr_t shm_start = 0;
@@ -116,6 +119,16 @@ static int virtio_gpu_probe(struct virtio_device *vdev)
 		return PTR_ERR(dev);
 
 	vdev->priv = dev;
+	is_pci_transport = vdev->dev.parent && dev_is_pci(vdev->dev.parent);
+	dma_dev = vdev->dev.parent ? vdev->dev.parent : &vdev->dev;
+	require_shm = !is_pci_transport;
+
+	dev_info(&vdev->dev,
+		 "TRANSPORT: %s (virtio=%s, parent=%s, dma_dev=%s)\n",
+		 is_pci_transport ? "PCI" : "MMIO",
+		 dev_name(&vdev->dev),
+		 vdev->dev.parent ? dev_name(vdev->dev.parent) : "none",
+		 dev_name(dma_dev));
 
 	/* 注意：此时不能获取 dev->dev_private，因为它还没分配！ */
 
@@ -144,32 +157,72 @@ static int virtio_gpu_probe(struct virtio_device *vdev)
 			of_node_put(mem_np);
 		}
 
-		/* 绑定保留内存到 PCI 父设备 */
-		if (vdev->dev.parent) {
-			ret = of_reserved_mem_device_init_by_idx(
-				vdev->dev.parent, np, 0);
-			if (ret) {
-				dev_err(&vdev->dev,
-					"Failed to init reserved memory on parent: %d\n",
-					ret);
-			} else {
-				dev_info(
-					&vdev->dev,
-					"Successfully assigned Reserved Memory to PCI Parent Device!\n");
+		if (!shm_start || !shm_size) {
+			dev_err(&vdev->dev,
+				"DTB virtio,gpu-config present but memory-region invalid (start=0x%llx size=0x%llx)\n",
+				(unsigned long long)shm_start,
+				(unsigned long long)shm_size);
+			of_node_put(np);
+			ret = -EINVAL;
+			goto err_free;
+		}
+
+		/* 优先绑定到 transport 设备，覆盖 vring 分配路径 */
+		ret = of_reserved_mem_device_init_by_idx(dma_dev, np, 0);
+		if (ret && dma_dev != &vdev->dev) {
+			/* 某些平台 parent 不可用时，回退到 virtio 设备本身 */
+			dev_warn(&vdev->dev,
+				 "Reserved memory init on parent failed (%d), fallback to virtio device\n",
+				 ret);
+			ret = of_reserved_mem_device_init_by_idx(&vdev->dev, np, 0);
+		}
+		if (ret) {
+			dev_err(&vdev->dev,
+				"Failed to init reserved memory: %d\n", ret);
+			if (require_shm) {
+				of_node_put(np);
+				goto err_free;
 			}
 		} else {
-			dev_err(&vdev->dev,
-				"Error: vdev->dev.parent is NULL!\n");
+			if (dma_dev != &vdev->dev) {
+				int ret2;
+
+				/* 同时绑定 virtio 设备，覆盖前端对象分配路径 */
+				ret2 = of_reserved_mem_device_init_by_idx(&vdev->dev,
+								  np, 0);
+				if (ret2)
+					dev_warn(&vdev->dev,
+						 "Reserved memory init on virtio device failed (%d)\n",
+						 ret2);
+			}
+			dev_info(&vdev->dev,
+				 "Reserved memory bound on %s transport\n",
+				 is_pci_transport ? "PCI" : "MMIO");
 		}
 		of_node_put(np);
 	} else {
+		if (require_shm) {
+			dev_err(&vdev->dev,
+				"virtio,gpu-config node not found in DTB (required for MMIO + shared-memory mode)\n");
+			ret = -ENODEV;
+			goto err_free;
+		}
 		dev_warn(&vdev->dev,
 			 "virtio,gpu-config node not found in DTB\n");
 	}
 
-	ret = virtio_gpu_pci_quirk(dev, vdev);
-	if (ret)
-		goto err_free;
+	if (is_pci_transport) {
+		ret = virtio_gpu_pci_quirk(dev, vdev);
+		if (ret)
+			goto err_free;
+	} else {
+		dev_info(&vdev->dev,
+			 "TRANSPORT: using non-PCI path, skip pci quirk\n");
+		/* MMIO/非PCI传输下使用通用唯一标识，避免进入 PCI 专有路径 */
+		ret = drm_dev_set_unique(dev, dev_name(&vdev->dev));
+		if (ret)
+			goto err_free;
+	}
 
 	/* 3. 初始化 GPU
      * ！！！关键点：virtio_gpu_init 内部会分配 vgdev 并赋值给 dev->dev_private ！！！
@@ -185,6 +238,7 @@ static int virtio_gpu_probe(struct virtio_device *vdev)
 
 	/* 5. 验证 Vring 位置 */
 	{
+		bool vring_ok = true;
 		/* 验证 Control Queue */
 		if (vgdev->ctrlq.vq) {
 			u64 addr = virtqueue_get_desc_addr(vgdev->ctrlq.vq);
@@ -203,6 +257,7 @@ static int virtio_gpu_probe(struct virtio_device *vdev)
 				} else {
 					dev_err(&vdev->dev,
 						"FAIL: Control Queue is OUTSIDE Reserved Memory!\n");
+					vring_ok = false;
 				}
 			}
 		}
@@ -224,8 +279,16 @@ static int virtio_gpu_probe(struct virtio_device *vdev)
 				} else {
 					dev_err(&vdev->dev,
 						"FAIL: Cursor Queue is OUTSIDE Reserved Memory!\n");
+					vring_ok = false;
 				}
 			}
+		}
+
+		if (require_shm && vgdev->vpu_shm_size > 0 && !vring_ok) {
+			dev_err(&vdev->dev,
+				"MMIO shared-memory mode requires vrings inside reserved-memory; aborting probe\n");
+			ret = -EINVAL;
+			goto err_deinit;
 		}
 	}
 

@@ -137,6 +137,10 @@ struct virtio_gpu_vbuffer {
 
 	dma_addr_t dma_addr; //记录分配时的地址
 	int total_size; //记录分配时的大小
+
+	/* Optional: vout payload staging in shared DMA pool */
+	dma_addr_t data_dma_addr;
+	uint32_t data_alloc_size;
 };
 
 struct virtio_gpu_output {
@@ -186,6 +190,7 @@ struct virtio_gpu_drv_cap_cache {
 struct virtio_gpu_device {
 	struct device *dev;
 	struct drm_device *ddev;
+	struct device *dma_dev;
 
 	struct virtio_device *vdev;
 
